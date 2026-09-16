@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Generation Loop — Prefill, Decode & the KV Cache</title>
+<style>
+  :root{
+    --bg:#0a0e14; --panel:#101722; --panel2:#0c1220; --border:#1e2a3c;
+    --text:#dbe4ee; --muted:#7d8ca0; --faint:#4b5a6e;
+    --oh:#ff9040; --oh-dim:rgba(255,144,64,.16);
+    --work:#3fb950; --work-dim:rgba(63,185,80,.15);
+    --accent:#58a6ff; --nvidia:#76b900;
+    --attn:#a78bfa; --ffn:#4dd0e1; --kv:#f472b6;
+    --mono:"Cascadia Code","JetBrains Mono",Consolas,ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:16px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+       -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 22px}
+  code,.mono{font-family:var(--mono)}
+  a{color:var(--accent)}
+
+  /* ---------- header ---------- */
+  header{padding:64px 0 40px;position:relative;overflow:hidden}
+  header::before{content:"";position:absolute;inset:0;
+    background:
+      radial-gradient(600px 300px at 15% 0%,rgba(88,166,255,.10),transparent 60%),
+      radial-gradient(700px 340px at 85% 10%,rgba(63,185,80,.08),transparent 60%);}
+  header .wrap{position:relative}
+  .kicker{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.16em;text-transform:uppercase}
+  h1{font-size:clamp(28px,5vw,44px);line-height:1.15;margin:10px 0 12px;letter-spacing:-.01em}
+  h1 .hl{color:var(--accent)}
+  .sub{color:var(--muted);max-width:780px;font-size:17px}
+  .chips{display:flex;gap:12px;flex-wrap:wrap;margin-top:26px}
+  .chip{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:12px 18px;min-width:150px}
+  .chip b{display:block;font-family:var(--mono);font-size:22px;font-weight:600}
+  .chip span{color:var(--muted);font-size:12.5px}
+  .chip.c1 b{color:var(--oh)} .chip.c2 b{color:var(--accent)} .chip.c3 b{color:var(--work)}
+
+  nav.top{position:sticky;top:0;z-index:50;background:rgba(10,14,20,.88);backdrop-filter:blur(8px);
+          border-bottom:1px solid var(--border)}
+  nav.top .wrap{display:flex;gap:22px;padding:10px 22px;overflow-x:auto}
+  nav.top a{color:var(--muted);text-decoration:none;font-size:13.5px;white-space:nowrap;padding:4px 0}
+  nav.top a:hover{color:var(--text)}
+
+  section{padding:62px 0;border-top:1px solid var(--border)}
+  h2{font-size:26px;margin:6px 0 8px;letter-spacing:-.01em}
+  h2 .n{color:var(--faint);font-family:var(--mono);font-size:18px;margin-right:10px}
+  .lead{color:var(--muted);max-width:800px;margin:0 0 28px}
+  .lead code{color:var(--text);background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:1px 6px;font-size:.85em}
+  .lead em{color:var(--text);font-style:normal;font-weight:600}
+
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:22px}
+  .note{font-size:12.5px;color:var(--faint);margin-top:12px}
+
+  pre.code{background:#080d15;border:1px solid var(--border);border-radius:12px;padding:16px 18px;
+           overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.6;margin:18px 0 0}
+  pre.code .k{color:#c586c0} pre.code .f{color:#dcdcaa} pre.code .s{color:#ce9178}
+  pre.code .c{color:#5a7a4a;font-style:italic} pre.code .n{color:#b5cea8}
+  .code-hint{color:var(--faint);font-size:12px;margin:8px 2px 0}
+
+  .btn{background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:9px;
+       padding:8px 16px;font-size:13.5px;cursor:pointer;transition:.2s;font-family:inherit}
+  .btn:hover{border-color:var(--accent)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#08111e;font-weight:700}
+  .btn:disabled{opacity:.45;cursor:default}
+
+  /* ---------- 1. the loop ---------- */
+  .mode-btns{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}
+  .mode{background:var(--panel2);border:1px solid var(--border);color:var(--muted);border-radius:999px;
+        padding:6px 15px;font-size:13px;cursor:pointer;font-family:inherit;transition:.2s}
+  .mode:hover{color:var(--text)}
+  .mode.on-naive{background:var(--oh-dim);border-color:var(--oh);color:var(--oh);font-weight:700}
+  .mode.on-cache{background:var(--work-dim);border-color:var(--work);color:var(--work);font-weight:700}
+  .loop-grid{display:grid;grid-template-columns:1fr 260px;gap:22px;align-items:start}
+  .tok-strip{display:flex;flex-wrap:wrap;gap:7px;min-height:40px;align-content:flex-start}
+  .chip-tok{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:5px 11px;
+            font-family:var(--mono);font-size:14px;transition:border-color .15s,box-shadow .15s,background .15s}
+  .chip-tok.prompt{color:var(--muted)}
+  .chip-tok.gen{color:var(--text);border-color:#2b3d55}
+  .chip-tok.new{animation:popin .3s ease-out}
+  .chip-tok.eos{color:var(--kv);border-color:var(--kv)}
+  .chip-tok.fed{border-color:var(--oh);background:var(--oh-dim);color:var(--oh);
+                box-shadow:0 0 12px rgba(255,144,64,.35)}
+  @keyframes popin{from{transform:scale(.6);opacity:0}to{transform:scale(1);opacity:1}}
+  .flow-row{display:flex;align-items:center;gap:14px;margin-top:16px;flex-wrap:wrap}
+  .model-box{border:1px solid var(--border);background:var(--panel2);border-radius:10px;padding:10px 18px;
+             font-family:var(--mono);font-size:13.5px;color:var(--muted)}
+  .model-box.pulse{border-color:var(--accent);color:var(--accent);
+                   animation:pulse .55s ease-out}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(88,166,255,.55)}70%{box-shadow:0 0 0 14px rgba(88,166,255,0)}
+                   100%{box-shadow:0 0 0 0 rgba(88,166,255,0)}}
+  .arrow{color:var(--faint);font-size:18px}
+  .status{font-family:var(--mono);font-size:12.5px;color:var(--faint);margin-top:14px;min-height:18px}
+  .tallies{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .tally{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:14px 16px;
+         border-top:3px solid var(--faint)}
+  .tally b{font-family:var(--mono);font-size:26px;font-weight:700;display:block}
+  .tally span{color:var(--muted);font-size:12px;line-height:1.45;display:block;margin-top:4px}
+  .tally.t1{border-top-color:var(--oh)} .tally.t1 b{color:var(--oh)}
+  .tally.t2{border-top-color:var(--work)} .tally.t2 b{color:var(--work)}
+  .ratio{margin-top:12px;padding:10px 16px;border-radius:10px;background:var(--panel2);
+         border-left:3px solid var(--accent);font-family:var(--mono);font-size:14px}
+  .ratio b{color:var(--accent)}
+
+  /* ---------- 2. the waste ---------- */
+  .waste-grid-wrap{display:grid;grid-template-columns:auto 1fr;gap:26px;align-items:center}
+  .wgrid{display:grid;grid-template-columns:repeat(12,20px);gap:3px}
+  .wcell{width:20px;height:20px;border-radius:4px}
+  .wcell.re{background:var(--oh);opacity:.75}
+  .wcell.new{background:var(--work);box-shadow:0 0 8px rgba(63,185,80,.5)}
+  .wcell.un{background:var(--faint);opacity:.14}
+  .axis{color:var(--faint);font-size:11px;font-family:var(--mono);margin-top:8px}
+  .calc{display:grid;grid-template-columns:1fr 1.15fr;gap:22px;align-items:stretch;margin-top:22px}
+  .ctl label{display:block;font-size:13px;color:var(--muted);margin:18px 0 6px}
+  .ctl label:first-child{margin-top:0}
+  .ctl .val{float:right;font-family:var(--mono);color:var(--text)}
+  input[type=range]{width:100%;accent-color:var(--accent);height:26px}
+  .presets{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+  .preset{background:var(--panel2);border:1px solid var(--border);color:var(--muted);border-radius:999px;
+          padding:5px 14px;font-size:12.5px;cursor:pointer;font-family:var(--mono);transition:.2s}
+  .preset:hover{color:var(--text);border-color:var(--accent)}
+  .preset.on{color:#08111e;background:var(--accent);border-color:var(--accent);font-weight:700}
+  .cbar{height:40px;border-radius:10px;overflow:hidden;display:flex;border:1px solid var(--border);margin:6px 0 10px}
+  .cbar>div{display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:12px;
+            white-space:nowrap;overflow:hidden;transition:width .15s ease-out;color:#0a0e14;font-weight:700}
+  .cbar .o{background:repeating-linear-gradient(45deg,var(--oh),var(--oh) 7px,#e0762b 7px,#e0762b 14px)}
+  .cbar .e{background:var(--work)}
+  .bigpct{font-family:var(--mono);font-size:44px;font-weight:700;line-height:1;color:var(--work)}
+  .mline{font-family:var(--mono);font-size:13px;color:var(--muted);margin-top:12px;line-height:1.8}
+  .mline b{color:var(--text)}
+
+  /* ---------- 3. phases ---------- */
+  .phases{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .phase{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:18px;
+         display:flex;flex-direction:column;gap:12px}
+  .phase h3{margin:0;font-size:16px;display:flex;align-items:center;gap:10px}
+  .badge{font-size:10px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;
+         border-radius:999px;padding:3px 10px}
+  .badge.b-comp{background:var(--work-dim);color:var(--work)}
+  .badge.b-mem{background:var(--oh-dim);color:var(--oh)}
+  .mini-grid{display:grid;grid-template-columns:repeat(8,1fr);gap:6px;padding:10px;background:var(--panel2);
+             border:1px solid var(--border);border-radius:10px}
+  .mdot{aspect-ratio:1;border-radius:50%;background:currentColor;opacity:.15;transition:opacity .12s,box-shadow .12s}
+  .mdot.seen{opacity:.4}
+  .mdot.lit{opacity:1;box-shadow:0 0 7px currentColor}
+  .phase p{margin:0;color:var(--muted);font-size:13px;line-height:1.55;flex:1}
+  .ph-read{font-family:var(--mono);font-size:12px;color:var(--faint)}
+  .ph-read b{color:var(--text)}
+  .gemstrip{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:22px}
+  .gem{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:16px}
+  .gem h4{margin:0 0 10px;font-size:13.5px}
+  .gem h4 code{color:var(--accent);font-size:13px}
+  .mmrow{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+  .mmrow .sym{color:var(--faint);font-size:15px;font-family:var(--mono)}
+  .mm{display:grid;gap:2px}
+  .mm i{width:11px;height:11px;border-radius:2.5px;background:var(--accent);opacity:.75}
+  .mm.v i{background:var(--oh)}
+  .mm.o i{background:var(--work)}
+  .gem p{margin:0;color:var(--muted);font-size:12.5px;line-height:1.55}
+  .gem p b{color:var(--text)}
+
+  /* ---------- 4. kv cache ---------- */
+  .kv-grid{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+  .kv-col h4{margin:0 0 12px;font-size:14px}
+  .kv-col h4 .tag{font-size:10px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;
+                  border-radius:4px;padding:2px 7px;margin-left:8px;vertical-align:1px}
+  .tag.t-bad{background:var(--oh-dim);color:var(--oh)}
+  .tag.t-good{background:var(--work-dim);color:var(--work)}
+  .bars8{display:flex;align-items:flex-end;gap:7px;height:150px;padding:10px 12px;background:var(--panel2);
+         border:1px solid var(--border);border-radius:10px}
+  .bars8 .b{flex:1;border-radius:4px 4px 0 0;min-height:5px;transition:height .4s ease-out}
+  .bars8 .b.b-oh{background:repeating-linear-gradient(45deg,var(--oh),var(--oh) 5px,#e0762b 5px,#e0762b 10px)}
+  .bars8 .b.b-ok{background:var(--work)}
+  .bar-cap{display:flex;justify-content:space-between;color:var(--faint);font-size:11px;font-family:var(--mono);margin-top:6px}
+  .cbuf{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:12px;
+        display:flex;flex-direction:column;gap:6px;min-height:150px}
+  .crow{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:12px;color:var(--faint);
+        opacity:0;transform:translateX(-8px);transition:opacity .25s,transform .25s}
+  .crow.in{opacity:1;transform:none}
+  .crow .pos{width:58px}
+  .crow .kvbox{flex:1;display:flex;gap:6px}
+  .crow .k,.crow .v{flex:1;height:14px;border-radius:4px;position:relative;overflow:hidden;
+                    background:rgba(167,139,250,.08);border:1px solid rgba(167,139,250,.25)}
+  .crow .k::after,.crow .v::after{content:"";position:absolute;inset:2px;border-radius:2px;
+                    background:repeating-linear-gradient(90deg,var(--attn),var(--attn) 6px,transparent 6px,transparent 9px)}
+  .crow .v::after{background:repeating-linear-gradient(90deg,var(--kv),var(--kv) 6px,transparent 6px,transparent 9px)}
+  .caveat{margin-top:18px;padding:14px 18px;border-radius:12px;background:rgba(210,153,34,.07);
+          border:1px solid rgba(210,153,34,.35);font-size:14px}
+  .caveat b{color:#e3b341}
+  .caveat .mono{font-size:12.5px}
+
+  /* ---------- 5. batching ---------- */
+  .batch-grid{display:grid;grid-template-columns:1fr 1.2fr;gap:22px;align-items:stretch}
+  .wbox{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:14px 18px;
+        font-family:var(--mono);font-size:13px;color:var(--muted);display:inline-block}
+  .wbox b{color:var(--accent);font-size:16px;display:block}
+  .toksout{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px;min-height:60px;align-content:flex-start}
+  .toksq{width:34px;height:34px;border-radius:8px;background:var(--work-dim);border:1px solid var(--work);
+         color:var(--work);font-family:var(--mono);font-size:10px;display:flex;align-items:center;
+         justify-content:center;animation:popin .25s ease-out}
+  .thr{height:34px;border-radius:10px;background:var(--panel2);border:1px solid var(--border);
+       overflow:hidden;position:relative;margin-top:10px}
+  .thr>div{height:100%;background:linear-gradient(90deg,var(--work),#2ea043);width:4%;
+           transition:width .15s ease-out;border-radius:10px}
+  .thr .ridge{position:absolute;top:0;bottom:0;left:78%;width:2px;background:var(--oh);opacity:.8}
+  .thr-cap{display:flex;justify-content:space-between;color:var(--faint);font-size:11px;font-family:var(--mono);margin-top:5px}
+
+  footer{padding:44px 0 60px;border-top:1px solid var(--border)}
+  .formula{font-family:var(--mono);font-size:14.5px;color:var(--muted);text-align:center;padding:8px 0 4px;line-height:1.9}
+  .formula b{color:var(--work)}
+  .formula .bad{color:var(--oh)}
+  .fin{color:var(--faint);text-align:center;font-size:13px;margin-top:10px}
+
+  .reveal{opacity:0;transform:translateY(16px);transition:opacity .6s ease,transform .6s ease}
+  .reveal.in{opacity:1;transform:none}
+
+  @media(max-width:940px){
+    .loop-grid{grid-template-columns:1fr}
+    .waste-grid-wrap{grid-template-columns:1fr;justify-items:center}
+    .calc{grid-template-columns:1fr}
+    .phases{grid-template-columns:1fr}
+    .gemstrip{grid-template-columns:1fr}
+    .kv-grid{grid-template-columns:1fr}
+    .batch-grid{grid-template-columns:1fr}
+  }
+  @media(max-width:560px){
+    .tallies{grid-template-columns:1fr}
+    .wgrid{grid-template-columns:repeat(12,14px)}
+    .wcell{width:14px;height:14px}
+  }
+  @media(prefers-reduced-motion:reduce){
+    *{transition:none!important;animation:none!important;scroll-behavior:auto}
+  }
+</style>
+</head>
+<body>
+
+<nav class="top"><div class="wrap">
+  <a href="#loop">① The loop</a>
+  <a href="#waste">② The waste</a>
+  <a href="#phases">③ Prefill vs decode</a>
+  <a href="#cache">④ The KV cache</a>
+  <a href="#batch">⑤ Batching</a>
+</div></nav>
+
+<header><div class="wrap">
+  <div class="kicker">GPU Inference · Chapter 2</div>
+  <h1>The <span class="hl">Generation Loop</span>:<br>how an LLM writes one token at a time</h1>
+  <p class="sub">You type a prompt. The model reads all of it at once — then writes the answer
+     <em>one token at a time</em>, feeding each new token back in to pick the next. That feedback loop
+     splits every request into two totally different jobs: a parallel <em>prefill</em> and a serial,
+     cache-driven <em>decode</em>. This page walks you through both, the wasteful naive way of doing it,
+     and the KV cache that fixes it.</p>
+  <div class="chips">
+    <div class="chip c1"><b>1</b><span>new token per forward pass during decode</span></div>
+    <div class="chip c2"><b>2 phases</b><span>prefill (parallel gulp) · decode (serial drip)</span></div>
+    <div class="chip c3"><b>−99%</b><span>of the naive re-computation deleted by the KV cache</span></div>
+  </div>
+</div></header>
+
+<!-- ============ 1. THE LOOP ============ -->
+<section id="loop"><div class="wrap reveal">
+  <div class="kicker">Section 1 · Interactive</div>
+  <h2><span class="n">01</span>The loop: one token per pass</h2>
+  <p class="lead">The model can't see the future. It looks at everything written so far, picks the most
+     likely <em>next</em> token, appends it, and repeats — the output of step <code>t</code> becomes part
+     of the input at step <code>t+1</code>. Watch what it has to <em>re-read</em> each step (orange flash).
+     Toggle the mode to see the KV cache fix in action.</p>
+
+  <div class="panel">
+    <div class="loop-grid">
+      <div>
+        <div class="mode-btns">
+          <button class="mode on-naive" id="modeNaive">😖 Naive — re-read everything</button>
+          <button class="mode" id="modeCache">🧠 With KV cache — keep notes</button>
+        </div>
+        <div class="tok-strip" id="tokStrip"></div>
+        <div class="flow-row">
+          <div class="model-box" id="modelBox">🧠 model.forward( ... )</div>
+          <span class="arrow">→</span>
+          <span style="font-family:var(--mono);font-size:13px;color:var(--muted)">argmax of last position → next token</span>
+        </div>
+        <div class="flow-row">
+          <button class="btn primary" id="genBtn">▶ Generate</button>
+          <button class="btn" id="resetBtn">↺ Reset</button>
+          <span class="status" id="loopStatus">press Generate to run the loop</span>
+        </div>
+      </div>
+      <div class="tallies">
+        <div class="tally t1"><b id="tallyN">0</b><span>token-passes <b style="color:var(--oh)">without</b> a cache<br>(every old token re-processed, every step)</span></div>
+        <div class="tally t2"><b id="tallyC">0</b><span>token-passes <b style="color:var(--work)">with</b> a KV cache<br>(prefill once, then 1 per step)</span></div>
+        <div class="ratio" style="grid-column:1/-1">naive does <b id="tallyRatio">—</b> the work of the cached version</div>
+      </div>
+    </div>
+  </div>
+
+  <pre class="code"><span class="k">def</span> <span class="f">generate</span>(model, prompt_ids, max_tokens):
+    input_ids = prompt_ids.<span class="f">clone</span>()
+    <span class="k">for</span> _ <span class="k">in</span> <span class="f">range</span>(max_tokens):
+        logits = <span class="f">model</span>(input_ids)               <span class="c"># re-runs the WHOLE sequence, every step</span>
+        next_token = torch.<span class="f">argmax</span>(logits[:, <span class="n">-1</span>, :], dim=<span class="n">-1</span>)
+        input_ids = torch.<span class="f">cat</span>([input_ids, next_token.unsqueeze(<span class="n">-1</span>)], dim=<span class="n">1</span>)
+        <span class="k">if</span> next_token.<span class="f">item</span>() == eos_token_id: <span class="k">break</span>
+    <span class="k">return</span> input_ids</pre>
+  <p class="code-hint">Correct, and quietly O(n²) wasteful — the next section counts exactly how wasteful.
+     Every token you've ever read from a chatbot was born in a loop exactly like this one.</p>
+</div></section>
+
+<!-- ============ 2. THE WASTE ============ -->
+<section id="waste"><div class="wrap reveal">
+  <div class="kicker">Section 2</div>
+  <h2><span class="n">02</span>Why the naive loop throws away almost all its work</h2>
+  <p class="lead">To write token 100, the naive loop re-processes tokens 0–99 — but the attention values
+     for tokens 0–98 are <em>exactly the same</em> as when it wrote token 99. It's like re-reading a
+     300-page book from page 1 every time you add one word to your book report. Count the orange below:
+     it's almost all redundant.</p>
+
+  <div class="panel">
+    <div class="waste-grid-wrap">
+      <div>
+        <div class="wgrid" id="wasteGrid"></div>
+        <div class="axis">token position →&nbsp;&nbsp;·&nbsp;&nbsp;rows: decode step ↓</div>
+      </div>
+      <div>
+        <div class="legend" style="display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--muted);margin-bottom:14px">
+          <span><i style="display:inline-block;width:11px;height:11px;border-radius:3px;background:var(--oh);opacity:.75;margin-right:6px;vertical-align:-1px"></i>re-computed (wasted)</span>
+          <span><i style="display:inline-block;width:11px;height:11px;border-radius:3px;background:var(--work);margin-right:6px;vertical-align:-1px"></i>the one new token</span>
+        </div>
+        <p style="color:var(--muted);font-size:14px;margin:0">Each <b style="color:var(--oh)">orange</b> square is a token the
+           model processes <em>again</em>, even though its keys and values were already computed at an earlier
+           step and can never change. The useful work — <b style="color:var(--work)">green</b> — is one thin diagonal.
+           With the KV cache, only the diagonal remains.</p>
+      </div>
+    </div>
+
+    <div class="calc">
+      <div class="ctl">
+        <label>Tokens generated <span class="val" id="nVal">256</span></label>
+        <input type="range" id="nRange" min="16" max="1024" step="16" value="256">
+        <label>Prompt length <span class="val" id="pVal">1024</span></label>
+        <input type="range" id="pRange" min="64" max="8192" step="64" value="1024">
+        <div class="presets">
+          <button class="preset" data-n="128" data-p="512">chat · p 512 → n 128</button>
+          <button class="preset" data-n="256" data-p="8192">summarize · p 8K → n 256</button>
+          <button class="preset" data-n="1024" data-p="4096">agent trace · p 4K → n 1K</button>
+        </div>
+        <p class="note">naive total = n·p + n(n−1)/2 &nbsp;·&nbsp; cached total = p + n</p>
+      </div>
+      <div>
+        <div class="cbar"><div class="o" id="workWaste"></div><div class="e" id="workUseful"></div></div>
+        <div class="bigpct" id="savedPct">99.6%</div>
+        <div style="color:var(--muted);font-size:13px">of the naive loop's token-passes are pure re-computation</div>
+        <div class="mline">
+          naive: <b id="naiveWork">294,784</b> token-passes &nbsp;·&nbsp; cached: <b id="cacheWork">1,280</b><br>
+          per generated token: <b id="perTok">1,152</b> re-processed without the cache vs <b>1</b> with it
+        </div>
+      </div>
+    </div>
+  </div>
+</div></section>
+
+<!-- ============ 3. PHASES ============ -->
+<section id="phases"><div class="wrap reveal">
+  <div class="kicker">Section 3</div>
+  <h2><span class="n">03</span>Two phases, one model — two different bottlenecks</h2>
+  <p class="lead">Same weights, completely different jobs. <em>Prefill</em> reads your whole prompt in one
+     giant parallel gulp — that's a matrix-times-matrix (<code>GEMM</code>), dense math the GPU loves.
+     <em>Decode</em> then writes one token per pass — a tiny vector-times-matrix (<code>GEMV</code>),
+     where the GPU mostly just moves bytes. Different shapes → different bottleneck.</p>
+
+  <div class="phases">
+    <div class="phase">
+      <h3>Prefill <span class="badge b-comp">compute-bound</span></h3>
+      <div class="mini-grid" style="color:var(--accent)" id="pgGrid"></div>
+      <div class="ph-read" id="pRead">one pass · all prompt tokens at once</div>
+      <p>The whole prompt is known upfront, so every token is processed <b>in parallel</b>: a big
+         (p × d) × (d × p) attention computation. Every weight the GPU loads gets reused across
+         all p rows → tons of math per byte → the <b>tensor cores stay hot</b>. Bigger prompts,
+         proportionally more math: efficient.</p>
+      <button class="btn" id="pReplay">↺ Replay</button>
+    </div>
+    <div class="phase">
+      <h3>Decode <span class="badge b-mem">memory-bound</span></h3>
+      <div class="mini-grid" style="color:var(--oh)" id="dgGrid"></div>
+      <div class="ph-read" id="dRead">step 0 / 64 — one token at a time</div>
+      <p>Only the <b>newest</b> token needs logits, so each pass is a (1 × d) vector against every weight
+         matrix. Each weight is read from memory, used <b>once</b>, thrown away → almost no math per byte.
+         The compute units sit idle waiting for data to arrive over the memory bus. The GPU is a brilliant
+         chef whose ingredients arrive one spoonful at a time.</p>
+      <button class="btn" id="dReplay">↺ Replay</button>
+    </div>
+  </div>
+
+  <div class="gemstrip">
+    <div class="gem">
+      <h4>Prefill runs <code>GEMM</code> — matrix × matrix</h4>
+      <div class="mmrow">
+        <div class="mm" style="grid-template-columns:repeat(6,11px)" id="gemmA"></div>
+        <span class="sym">×</span>
+        <div class="mm" style="grid-template-columns:repeat(6,11px)" id="gemmB"></div>
+        <span class="sym">=</span>
+        <div class="mm" style="grid-template-columns:repeat(6,11px)" id="gemmC"></div>
+      </div>
+      <p><b>Q (p × d) · K (d × p)</b> — a weight loaded once is multiplied against all p query rows.
+         Reuse ×p → high arithmetic intensity → <b>compute-bound</b>.</p>
+    </div>
+    <div class="gem">
+      <h4>Decode runs <code>GEMV</code> — vector × matrix</h4>
+      <div class="mmrow">
+        <div class="mm v" style="grid-template-columns:repeat(1,11px)" id="gemvX"></div>
+        <span class="sym">×</span>
+        <div class="mm" style="grid-template-columns:repeat(6,11px)" id="gemvA"></div>
+        <span class="sym">=</span>
+        <div class="mm o" style="grid-template-columns:repeat(1,11px)" id="gemvY"></div>
+      </div>
+      <p><b>q (1 × d) · K (d × s)</b> — every weight element is read, used in exactly one multiply-add,
+         and never seen again. Reuse ×1 → arithmetic intensity ≈ 1 → <b>memory-bound</b>.</p>
+    </div>
+  </div>
+</div></section>
+
+<!-- ============ 4. KV CACHE ============ -->
+<section id="cache"><div class="wrap reveal">
+  <div class="kicker">Section 4</div>
+  <h2><span class="n">04</span>The KV cache: take notes, don't re-read the book</h2>
+  <p class="lead">Here's the first big idea of LLM inference. Each token's <em>keys</em> and <em>values</em>
+     depend only on that token itself — once computed, they <em>never change</em>. So compute them once
+     during prefill, write them into a cache, and from then on every decode step just appends one new row
+     and glances at the notes. That's what turns generation from O(n²) into O(n) per token.</p>
+
+  <div class="panel">
+    <div class="kv-grid">
+      <div class="kv-col">
+        <h4>Work per decode step <span class="tag t-bad">naive grows</span><span class="tag t-good">cached stays flat</span></h4>
+        <div class="bars8">
+          <div class="b b-oh" style="height:12%"></div><div class="b b-oh" style="height:24%"></div>
+          <div class="b b-oh" style="height:36%"></div><div class="b b-oh" style="height:48%"></div>
+          <div class="b b-oh" style="height:60%"></div><div class="b b-oh" style="height:72%"></div>
+          <div class="b b-oh" style="height:84%"></div><div class="b b-oh" style="height:96%"></div>
+          <div style="width:10px"></div>
+          <div class="b b-ok" style="height:12%"></div><div class="b b-ok" style="height:12%"></div>
+          <div class="b b-ok" style="height:12%"></div><div class="b b-ok" style="height:12%"></div>
+          <div class="b b-ok" style="height:12%"></div><div class="b b-ok" style="height:12%"></div>
+          <div class="b b-ok" style="height:12%"></div><div class="b b-ok" style="height:12%"></div>
+        </div>
+        <div class="bar-cap"><span>← naive: step 1 → 8, re-processes everything</span><span>cached: 1 token →</span></div>
+        <p style="color:var(--muted);font-size:13px;line-height:1.55;margin:14px 0 0">
+           Left: without a cache, step <em>k</em> re-processes all <em>k</em> previous tokens — cost grows
+           every step. Right: with a cache, every step processes exactly <b style="color:var(--work)">one</b>
+           new token; the history is looked up, not recomputed.</p>
+      </div>
+      <div class="kv-col">
+        <h4>The cache fills one row per token</h4>
+        <div class="cbuf" id="cacheBuf"></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
+          <span class="bar-cap" style="margin:0">pre-allocated buffer · slots used: <b id="cCount" style="color:var(--text)">0</b>/10</span>
+          <button class="btn" id="cReplay">↺ Replay</button>
+        </div>
+        <p style="color:var(--muted);font-size:13px;line-height:1.55;margin:14px 0 0">
+           Each new token appends its K (purple) and V (pink) to <em>every layer's</em> cache. The new token's
+           query is dotted against <em>all</em> cached keys, and its output is a weighted sum of all cached
+           values — attention over history without recomputing history.</p>
+      </div>
+    </div>
+
+    <div class="caveat"><b>⚠ The cache isn't free — it's the memory hog of production inference.</b><br>
+      Each token adds a K and a V to every layer:
+      <span class="mono">2 · layers · kv_heads · head_dim · 2 bytes</span> per token
+      ≈ <b>0.1–0.5 MB</b> for a 7B-class model. One 4K-token conversation ≈ 0.6–2 GB —
+      <em>per user</em>. Multiply by thousands of simultaneous users and you see why serving systems
+      obsess over cache memory management.</div>
+  </div>
+
+  <pre class="code"><span class="k">def</span> <span class="f">decode_attention</span>(q_new, k_cache, v_cache, k_new, v_new):
+    k_cache = torch.<span class="f">cat</span>([k_cache, k_new], dim=<span class="n">-2</span>)   <span class="c"># append 1 new row — that's the whole trick</span>
+    v_cache = torch.<span class="f">cat</span>([v_cache, v_new], dim=<span class="n">-2</span>)
+    scores  = q_new @ k_cache.<span class="f">transpose</span>(<span class="n">-2</span>,<span class="n">-1</span>) / math.<span class="f">sqrt</span>(q_new.shape[<span class="n">-1</span>])
+    <span class="k">return</span> torch.<span class="f">softmax</span>(scores, <span class="n">-1</span>) @ v_cache, k_cache, v_cache</pre>
+  <p class="code-hint">Shapes tell the story: q_new is (1, d) against k_cache (s, d) — one row against the
+     whole history. A GEMV against the cache, a GEMM against nothing else.</p>
+</div></section>
+
+<!-- ============ 5. BATCHING ============ -->
+<section id="batch"><div class="wrap reveal">
+  <div class="kicker">Section 5 · Interactive</div>
+  <h2><span class="n">05</span>Why decode wants batching</h2>
+  <p class="lead">At batch size 1, every single token requires reading <em>all ~15 GB of weights</em> from
+     GPU memory — a whole grocery-trip truck to deliver one item to one house. Batch <em>B</em> requests
+     together and the same one trip delivers to B houses: the weights are read once and shared.
+     Bonus: with B rows instead of 1, your vector × matrix quietly becomes a matrix × matrix again —
+     <em>GEMV turns back into GEMM</em>, and the arithmetic intensity multiplies by B.</p>
+
+  <div class="panel">
+    <div class="batch-grid">
+      <div class="ctl">
+        <label>Requests batched together <span class="val" id="bVal">8</span></label>
+        <input type="range" id="bRange" min="1" max="64" step="1" value="8">
+        <div class="presets">
+          <button class="preset" data-b="1">solo · B = 1</button>
+          <button class="preset" data-b="8">small · B = 8</button>
+          <button class="preset" data-b="32">server · B = 32</button>
+          <button class="preset" data-b="64">busy · B = 64</button>
+        </div>
+        <p class="note">one decode step = one read of all weights, shared by every request in the batch</p>
+      </div>
+      <div>
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+          <div class="wbox"><b>~15 GB</b>model weights · read once per step</div>
+          <span class="arrow" style="color:var(--faint);font-size:18px">→</span>
+          <span style="font-family:var(--mono);font-size:13.5px;color:var(--text);font-weight:600" id="gbTok">1.9 GB read per token</span>
+        </div>
+        <div class="toksout" id="tokOut"></div>
+        <div class="thr"><div id="thrBar"></div><div class="ridge" title="compute saturation (illustrative)"></div></div>
+        <div class="thr-cap"><span>relative decode throughput (1× … 64×)</span><span>orange line ≈ where compute saturates</span></div>
+      </div>
+    </div>
+    <p class="note" style="font-size:13px">Real servers do this <em>continuously</em>: vLLM and SGLang re-fill the
+       batch the moment any request finishes (continuous batching). Throughput climbs until the GPU's compute
+       saturates — past that point you're trading latency, not buying speed.</p>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <div class="formula">
+    work for n tokens after prompt p · <span class="bad">naive: n·p + n(n−1)/2</span> → <b>cached: p + n</b><br>
+    e.g. p = 1024, n = 256: <span class="bad">294,784</span> → <b>1,280</b> token-passes (−99.6%) · prefill = GEMM, compute-bound · decode = GEMV, memory-bound
+  </div>
+  <div class="fin">The Generation Loop · part of the physics-llm-inference series · numbers illustrative of a 7B-class model</div>
+</div></footer>
+
+<script>
+(function(){
+  "use strict";
+  var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ---------- reveal on scroll ---------- */
+  var io = new IntersectionObserver(function(es){
+    es.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add("in"); io.unobserve(e.target);} });
+  },{threshold:.12});
+  document.querySelectorAll(".reveal").forEach(function(el){ io.observe(el); });
+
+  /* ---------- 1. the generation loop ---------- */
+  var PROMPT = ["The","cat","sat","on","the"],
+      GEN    = ["mat","and","fell","asleep",".","⟨eos⟩"];
+  var tokStrip  = document.getElementById("tokStrip"),
+      genBtn    = document.getElementById("genBtn"),
+      resetBtn  = document.getElementById("resetBtn"),
+      modeNaive = document.getElementById("modeNaive"),
+      modeCache = document.getElementById("modeCache"),
+      loopStat  = document.getElementById("loopStatus"),
+      modelBox  = document.getElementById("modelBox"),
+      tallyNEl  = document.getElementById("tallyN"),
+      tallyCEl  = document.getElementById("tallyC"),
+      ratioEl   = document.getElementById("tallyRatio");
+  var gen = 0, naiveTally = 0, cacheTally = 0, running = false, mode = "naive", timers = [];
+
+  function addChip(t, cls){
+    var s = document.createElement("span");
+    s.className = "chip-tok " + (cls || "");
+    s.textContent = t;
+    tokStrip.appendChild(s);
+    return s;
+  }
+  function renderPrompt(){
+    tokStrip.innerHTML = "";
+    PROMPT.forEach(function(t){ addChip(t, "prompt"); });
+  }
+  function flashFed(all){
+    var cs = tokStrip.children, i;
+    if(all){ for(i = 0; i < cs.length; i++) mark(cs[i]); }
+    else if(cs.length){ mark(cs[cs.length - 1]); }
+    function mark(el){
+      el.classList.add("fed");
+      setTimeout(function(){ el.classList.remove("fed"); }, 430);
+    }
+  }
+  function fmt(n){ return n.toLocaleString("en-US"); }
+  function updateTally(){
+    tallyNEl.textContent = fmt(naiveTally);
+    tallyCEl.textContent = fmt(cacheTally);
+    ratioEl.textContent = cacheTally > 0 ? fmt(Math.round(naiveTally / cacheTally * 10) / 10) + "× " : "—";
+  }
+  function step(done){
+    if(gen >= GEN.length){ running = false; genBtn.disabled = false; return; }
+    var isPrefill = (gen === 0),
+        curLen = PROMPT.length + gen;
+    naiveTally += curLen;
+    cacheTally += isPrefill ? PROMPT.length : 1;
+    updateTally();
+    modelBox.classList.add("pulse");
+    flashFed(mode === "naive" || isPrefill);
+    loopStat.textContent = isPrefill
+      ? "prefill: whole prompt in one parallel pass" + (mode === "naive" ? " (and it will do this AGAIN every step)" : " — this is the only time")
+      : (mode === "naive"
+          ? "naive: re-reading all " + curLen + " tokens just to pick one"
+          : "decode: only the 1 new token is fed — history lives in the cache");
+    timers.push(setTimeout(function(){
+      modelBox.classList.remove("pulse");
+      var t = GEN[gen], isEos = t.indexOf("eos") >= 0;
+      addChip(t, isEos ? "eos new" : "gen new");
+      gen++;
+      if(isEos){
+        loopStat.textContent = "⟨eos⟩ sampled — the loop stops here.";
+        running = false; genBtn.disabled = false;
+        return;
+      }
+      timers.push(setTimeout(done, reduceMotion ? 60 : 300));
+    }, reduceMotion ? 120 : 520));
+  }
+  function generate(){
+    if(running) return;
+    if(gen >= GEN.length) resetLoop();
+    running = true; genBtn.disabled = true;
+    (function next(){
+      if(!running) return;
+      if(gen >= GEN.length){ running = false; genBtn.disabled = false; return; }
+      step(next);
+    })();
+  }
+  function resetLoop(){
+    timers.forEach(clearTimeout); timers = [];
+    running = false; genBtn.disabled = false;
+    gen = 0; naiveTally = 0; cacheTally = 0;
+    renderPrompt(); updateTally();
+    loopStat.textContent = mode === "naive"
+      ? "naive mode: watch the WHOLE sequence flash orange every step"
+      : "cache mode: only the newest token flashes after prefill";
+  }
+  function setMode(m){
+    mode = m;
+    modeNaive.className = "mode" + (m === "naive" ? " on-naive" : "");
+    modeCache.className = "mode" + (m === "cache" ? " on-cache" : "");
+    resetLoop();
+  }
+  genBtn.addEventListener("click", generate);
+  resetBtn.addEventListener("click", resetLoop);
+  modeNaive.addEventListener("click", function(){ setMode("naive"); });
+  modeCache.addEventListener("click", function(){ setMode("cache"); });
+  renderPrompt(); updateTally();
+
+  /* ---------- 2. the waste triangle + calculator ---------- */
+  var wg = document.getElementById("wasteGrid"), STEPS = 12, r, c, cell;
+  for(r = 0; r < STEPS; r++){
+    for(c = 0; c < STEPS; c++){
+      cell = document.createElement("div");
+      cell.className = "wcell " + (c < r ? "re" : (c === r ? "new" : "un"));
+      wg.appendChild(cell);
+    }
+  }
+
+  var nRange = document.getElementById("nRange"),
+      pRange = document.getElementById("pRange"),
+      nVal = document.getElementById("nVal"),
+      pVal = document.getElementById("pVal"),
+      workWaste = document.getElementById("workWaste"),
+      workUseful = document.getElementById("workUseful"),
+      savedPct = document.getElementById("savedPct"),
+      naiveWork = document.getElementById("naiveWork"),
+      cacheWork = document.getElementById("cacheWork"),
+      perTok = document.getElementById("perTok");
+
+  function updateCalc(){
+    var n = parseInt(nRange.value, 10), p = parseInt(pRange.value, 10);
+    var naive = n * p + n * (n - 1) / 2, cached = p + n;
+    var usefulPct = cached / naive * 100, saved = 100 - usefulPct;
+    nVal.textContent = fmt(n); pVal.textContent = fmt(p);
+    workUseful.style.width = Math.max(1.5, usefulPct) + "%";
+    workWaste.style.width = Math.min(98.5, 100 - Math.max(1.5, usefulPct)) + "%";
+    workUseful.textContent = usefulPct > 9 ? "useful" : "";
+    workWaste.textContent = saved > 9 ? "re-computed" : "";
+    savedPct.textContent = saved.toFixed(1) + "%";
+    naiveWork.textContent = fmt(Math.round(naive));
+    cacheWork.textContent = fmt(cached);
+    perTok.textContent = fmt(Math.round(naive / n));
+  }
+  nRange.addEventListener("input", updateCalc);
+  pRange.addEventListener("input", updateCalc);
+  document.querySelectorAll("#waste .preset").forEach(function(b){
+    b.addEventListener("click", function(){
+      nRange.value = b.dataset.n; pRange.value = b.dataset.p; updateCalc();
+    });
+  });
+  updateCalc();
+
+  /* ---------- 3. prefill vs decode dot animations ---------- */
+  function buildDots(el, n){
+    var dots = [], i, d;
+    for(i = 0; i < n; i++){
+      d = document.createElement("div");
+      d.className = "mdot";
+      el.appendChild(d); dots.push(d);
+    }
+    return dots;
+  }
+  var pgGrid = document.getElementById("pgGrid"),
+      dgGrid = document.getElementById("dgGrid"),
+      pRead  = document.getElementById("pRead"),
+      dRead  = document.getElementById("dRead");
+  var pDots = buildDots(pgGrid, 64), dDots = buildDots(dgGrid, 64);
+  var pT = null, dT = null;
+
+  function playPrefill(){
+    clearTimeout(pT);
+    pDots.forEach(function(d){ d.classList.remove("lit"); });
+    pRead.textContent = "feeding the prompt...";
+    if(reduceMotion){ pDots.forEach(function(d){ d.classList.add("lit"); });
+      pRead.textContent = "one pass · all 64 tokens at once"; return; }
+    pDots.forEach(function(d, i){
+      pT = setTimeout(function(){ d.classList.add("lit"); }, 80 + i * 9);
+    });
+    pT = setTimeout(function(){ pRead.textContent = "one pass · all 64 tokens at once"; }, 80 + 64 * 9 + 100);
+  }
+  function playDecode(){
+    clearTimeout(dT);
+    var k = 0;
+    dDots.forEach(function(d){ d.classList.remove("lit", "seen"); });
+    if(reduceMotion){
+      dDots.forEach(function(d){ d.classList.add("seen"); });
+      dDots[dDots.length - 1].classList.add("lit");
+      dRead.textContent = "step 64 / 64 — one token at a time"; return;
+    }
+    dRead.textContent = "step 0 / 64 — one token at a time";
+    (function tick(){
+      if(k > 0) dDots[k - 1].classList.replace("lit", "seen");
+      if(k >= dDots.length){ dDots[dDots.length - 1].classList.add("lit"); return; }
+      dDots[k].classList.add("lit");
+      k++;
+      dRead.textContent = "step " + k + " / 64 — one token at a time";
+      dT = setTimeout(tick, 130);
+    })();
+  }
+  document.getElementById("pReplay").addEventListener("click", playPrefill);
+  document.getElementById("dReplay").addEventListener("click", playDecode);
+  var io3 = new IntersectionObserver(function(es){
+    es.forEach(function(e){
+      if(e.isIntersecting){ playPrefill(); playDecode(); io3.disconnect(); }
+    });
+  },{threshold:.3});
+  io3.observe(pgGrid);
+
+  /* GEMM / GEMV mini diagrams */
+  function fillMM(id, rows, cols){
+    var el = document.getElementById(id), i;
+    for(i = 0; i < rows * cols; i++) el.appendChild(document.createElement("i"));
+  }
+  fillMM("gemmA", 6, 6); fillMM("gemmB", 6, 6); fillMM("gemmC", 6, 6);
+  fillMM("gemvX", 6, 1); fillMM("gemvA", 6, 6); fillMM("gemvY", 6, 1);
+
+  /* ---------- 4. kv cache fill animation ---------- */
+  var cacheBuf = document.getElementById("cacheBuf"),
+      cCount = document.getElementById("cCount"),
+      cT = null;
+  function playCache(){
+    clearTimeout(cT);
+    cacheBuf.innerHTML = "";
+    var rows = [], i;
+    for(i = 0; i < 10; i++){
+      var row = document.createElement("div");
+      row.className = "crow";
+      row.innerHTML = "<span class='pos'>pos " + (i + 1) + "</span>" +
+                      "<span class='kvbox'><span class='k'></span><span class='v'></span></span>";
+      cacheBuf.appendChild(row); rows.push(row);
+    }
+    if(reduceMotion){
+      rows.forEach(function(rw){ rw.classList.add("in"); });
+      cCount.textContent = 10; return;
+    }
+    i = 0;
+    (function tick(){
+      if(i >= rows.length) return;
+      rows[i].classList.add("in");
+      i++; cCount.textContent = i;
+      cT = setTimeout(tick, 280);
+    })();
+  }
+  document.getElementById("cReplay").addEventListener("click", playCache);
+  var io4 = new IntersectionObserver(function(es){
+    es.forEach(function(e){ if(e.isIntersecting){ playCache(); io4.disconnect(); } });
+  },{threshold:.3});
+  io4.observe(cacheBuf);
+
+  /* ---------- 5. batching ---------- */
+  var bRange = document.getElementById("bRange"),
+      bVal = document.getElementById("bVal"),
+      gbTok = document.getElementById("gbTok"),
+      tokOut = document.getElementById("tokOut"),
+      thrBar = document.getElementById("thrBar");
+  function updateBatch(){
+    var B = parseInt(bRange.value, 10), i, d;
+    bVal.textContent = B;
+    gbTok.textContent = (15 / B).toFixed(B >= 10 ? 1 : 2) + " GB read per token";
+    tokOut.innerHTML = "";
+    for(i = 0; i < B; i++){
+      d = document.createElement("div");
+      d.className = "toksq";
+      d.textContent = "tok";
+      tokOut.appendChild(d);
+    }
+    thrBar.style.width = Math.max(4, B / 64 * 100) + "%";
+    document.querySelectorAll("#batch .preset").forEach(function(b){
+      b.classList.toggle("on", parseInt(b.dataset.b, 10) === B);
+    });
+  }
+  bRange.addEventListener("input", updateBatch);
+  document.querySelectorAll("#batch .preset").forEach(function(b){
+    b.addEventListener("click", function(){ bRange.value = b.dataset.b; updateBatch(); });
+  });
+  updateBatch();
+})();
+</script>
+</body>
+</html>

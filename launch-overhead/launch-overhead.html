@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kernel Launch Overhead — Visual Explainer</title>
+<style>
+  :root{
+    --bg:#0a0e14; --panel:#101722; --panel2:#0c1220; --border:#1e2a3c;
+    --text:#dbe4ee; --muted:#7d8ca0; --faint:#4b5a6e;
+    --oh:#ff9040; --oh-dim:rgba(255,144,64,.16);
+    --work:#3fb950; --work-dim:rgba(63,185,80,.15);
+    --accent:#58a6ff; --nvidia:#76b900;
+    --attn:#a78bfa; --ffn:#4dd0e1; --norm:#f472b6; --misc:#8b98a9;
+    --mono:"Cascadia Code","JetBrains Mono",Consolas,ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:16px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+       -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 22px}
+  code,.mono{font-family:var(--mono)}
+  a{color:var(--accent)}
+
+  /* ---------- header ---------- */
+  header{padding:64px 0 40px;position:relative;overflow:hidden}
+  header::before{content:"";position:absolute;inset:0;
+    background:
+      radial-gradient(600px 300px at 15% 0%,rgba(255,144,64,.10),transparent 60%),
+      radial-gradient(700px 340px at 85% 10%,rgba(88,166,255,.09),transparent 60%);}
+  header .wrap{position:relative}
+  .kicker{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.16em;text-transform:uppercase}
+  h1{font-size:clamp(28px,5vw,44px);line-height:1.15;margin:10px 0 12px;letter-spacing:-.01em}
+  h1 .hl{color:var(--oh)}
+  .sub{color:var(--muted);max-width:760px;font-size:17px}
+  .chips{display:flex;gap:12px;flex-wrap:wrap;margin-top:26px}
+  .chip{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:12px 18px;min-width:150px}
+  .chip b{display:block;font-family:var(--mono);font-size:22px;font-weight:600}
+  .chip span{color:var(--muted);font-size:12.5px}
+  .chip.c1 b{color:var(--oh)} .chip.c2 b{color:var(--accent)} .chip.c3 b{color:var(--work)}
+
+  nav.top{position:sticky;top:0;z-index:50;background:rgba(10,14,20,.88);backdrop-filter:blur(8px);
+          border-bottom:1px solid var(--border)}
+  nav.top .wrap{display:flex;gap:22px;padding:10px 22px;overflow-x:auto}
+  nav.top a{color:var(--muted);text-decoration:none;font-size:13.5px;white-space:nowrap;padding:4px 0}
+  nav.top a:hover{color:var(--text)}
+
+  section{padding:62px 0;border-top:1px solid var(--border)}
+  h2{font-size:26px;margin:6px 0 8px;letter-spacing:-.01em}
+  h2 .n{color:var(--faint);font-family:var(--mono);font-size:18px;margin-right:10px}
+  .lead{color:var(--muted);max-width:780px;margin:0 0 28px}
+  .lead code{color:var(--text);background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:1px 6px;font-size:.85em}
+
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:22px}
+  .note{font-size:12.5px;color:var(--faint);margin-top:12px}
+
+  /* ---------- 1. pipeline ---------- */
+  .steps{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}
+  .step-card{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:14px 12px;
+             transition:transform .3s,border-color .3s,box-shadow .3s;position:relative}
+  .step-card .ic{font-size:22px;line-height:1}
+  .step-card .nm{font-weight:600;font-size:13.5px;margin:8px 0 4px;line-height:1.3}
+  .step-card .ds{color:var(--muted);font-size:11.5px;line-height:1.45}
+  .step-card .no{position:absolute;top:10px;right:12px;font-family:var(--mono);font-size:11px;color:var(--faint)}
+  .step-card.active{transform:translateY(-4px)}
+  .step-card.oh-side.active{border-color:var(--oh);box-shadow:0 0 0 1px var(--oh),0 8px 26px -8px rgba(255,144,64,.45)}
+  .step-card.work-side.active{border-color:var(--work);box-shadow:0 0 0 1px var(--work),0 8px 26px -8px rgba(63,185,80,.4)}
+  .tl{display:flex;gap:4px;margin-top:18px}
+  .tl-seg{flex:1;height:12px;border-radius:6px;opacity:.28;transition:opacity .3s,box-shadow .3s}
+  .tl-seg.s-oh{background:var(--oh)} .tl-seg.s-work{background:var(--work)} .tl-seg.s-done{background:#3a4a5e}
+  .tl-seg.active{opacity:1;box-shadow:0 0 14px currentColor}
+  .brackets{display:grid;grid-template-columns:4fr 1fr 1fr;gap:10px;margin-top:10px}
+  .brk{border-top:2px solid;padding-top:6px;font-size:11.5px;color:var(--muted)}
+  .brk b{display:block;font-family:var(--mono);font-size:12px}
+  .brk.b-oh{border-color:var(--oh)} .brk.b-work{border-color:var(--work)} .brk.b-done{border-color:#3a4a5e}
+  .brk .tag{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+            border-radius:4px;padding:1px 6px;margin-left:6px;vertical-align:1px}
+  .b-oh .tag{background:var(--oh-dim);color:var(--oh)}
+  .b-work .tag{background:var(--work-dim);color:var(--work)}
+
+  /* ---------- 2. calculator ---------- */
+  .calc{display:grid;grid-template-columns:1fr 1.15fr;gap:22px;align-items:stretch}
+  .ctl label{display:block;font-size:13px;color:var(--muted);margin:18px 0 6px}
+  .ctl label:first-child{margin-top:0}
+  .ctl .val{float:right;font-family:var(--mono);color:var(--text)}
+  input[type=range]{width:100%;accent-color:var(--oh);height:26px}
+  .presets{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+  .preset{background:var(--panel2);border:1px solid var(--border);color:var(--muted);border-radius:999px;
+          padding:5px 14px;font-size:12.5px;cursor:pointer;font-family:var(--mono);transition:.2s}
+  .preset:hover{color:var(--text);border-color:var(--accent)}
+  .preset.on{color:#08111e;background:var(--accent);border-color:var(--accent);font-weight:700}
+  .cbar{height:40px;border-radius:10px;overflow:hidden;display:flex;border:1px solid var(--border);margin:6px 0 10px}
+  .cbar>div{display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:12px;
+            white-space:nowrap;overflow:hidden;transition:width .15s ease-out;color:#0a0e14;font-weight:700}
+  .cbar .o{background:repeating-linear-gradient(45deg,var(--oh),var(--oh) 7px,#e0762b 7px,#e0762b 14px)}
+  .cbar .e{background:var(--work)}
+  .bigpct{font-family:var(--mono);font-size:44px;font-weight:700;line-height:1}
+  .verdict{margin-top:12px;padding:12px 16px;border-radius:10px;background:var(--panel2);
+           border-left:3px solid var(--faint);font-size:14px}
+  .verdict.v1{border-color:#2ea043;color:#7ee2a0}
+  .verdict.v2{border-color:#d29922;color:#e3b341}
+  .verdict.v3{border-color:var(--oh);color:#ffb066}
+  .verdict.v4{border-color:#f85149;color:#ff8a84}
+  .waste{color:var(--muted);font-size:13px;margin-top:10px;font-family:var(--mono)}
+
+  pre.code{background:#080d15;border:1px solid var(--border);border-radius:12px;padding:16px 18px;
+           overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.6;margin:18px 0 0}
+  pre.code .k{color:#c586c0} pre.code .f{color:#dcdcaa} pre.code .s{color:#ce9178}
+  pre.code .c{color:#5a7a4a;font-style:italic} pre.code .n{color:#b5cea8}
+  .code-hint{color:var(--faint);font-size:12px;margin:8px 2px 0}
+
+  /* ---------- 3. decode ---------- */
+  .dstats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:22px}
+  .dstat{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:14px 16px;border-top:3px solid var(--faint)}
+  .dstat b{font-family:var(--mono);font-size:24px;font-weight:600;display:block}
+  .dstat span{color:var(--muted);font-size:12px;line-height:1.4;display:block;margin-top:4px}
+  .dstat.d1{border-top-color:var(--attn)} .dstat.d1 b{color:var(--attn)}
+  .dstat.d2{border-top-color:var(--ffn)}  .dstat.d2 b{color:var(--ffn)}
+  .dstat.d3{border-top-color:var(--norm)} .dstat.d3 b{color:var(--norm)}
+  .dstat.d4{border-top-color:var(--misc)} .dstat.d4 b{color:var(--misc)}
+  .dotgrid{display:grid;grid-template-columns:repeat(34,1fr);gap:4px;margin:6px 0 4px}
+  .dot{aspect-ratio:1;border-radius:50%;background:var(--faint);opacity:.16;transition:opacity .18s,box-shadow .18s}
+  .dot.lit{opacity:1;box-shadow:0 0 6px currentColor}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;margin:14px 0 26px;font-size:12.5px;color:var(--muted)}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:-1px}
+  .mathline{display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-family:var(--mono);
+            font-size:clamp(15px,2.4vw,19px);margin:4px 0 22px;color:var(--muted)}
+  .mathline b{color:var(--text);font-weight:600}
+  .mathline .eq{color:var(--oh);font-weight:700}
+  .tbar{height:48px;border-radius:10px;overflow:hidden;display:flex;border:1px solid var(--border);position:relative}
+  .tbar .oh-part{background:repeating-linear-gradient(45deg,var(--oh),var(--oh) 8px,#e0762b 8px,#e0762b 16px);
+                 display:flex;align-items:center;justify-content:center;color:#0a0e14;font-family:var(--mono);
+                 font-weight:700;font-size:12.5px;white-space:nowrap;overflow:hidden}
+  .tbar .work-part{background:var(--work-dim);border-left:2px solid var(--work);display:flex;align-items:center;
+                   justify-content:center;color:var(--work);font-family:var(--mono);font-size:12.5px;white-space:nowrap;overflow:hidden}
+  .ticks{display:flex;justify-content:space-between;color:var(--faint);font-family:var(--mono);font-size:11px;margin-top:5px}
+  .cmp{display:grid;grid-template-columns:110px 1fr;gap:14px;align-items:center;margin-top:20px}
+  .cmp .lbl{color:var(--muted);font-size:12.5px;text-align:right}
+  .tbar.small{height:34px}
+  .tbar.small .oh-part{font-size:0;min-width:5px}
+  .tbar.small .work-part{font-size:11.5px}
+
+  /* ---------- 4. race ---------- */
+  .race-head{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:16px}
+  .btn{background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:9px;
+       padding:8px 16px;font-size:13.5px;cursor:pointer;transition:.2s;font-family:inherit}
+  .btn:hover{border-color:var(--accent)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#08111e;font-weight:700}
+  .tread{margin-left:auto;font-family:var(--mono);color:var(--muted);font-size:14px}
+  .tread b{color:var(--text);display:inline-block;min-width:64px}
+  .race-body{position:relative;padding:6px 0}
+  .lane-lbl{display:flex;justify-content:space-between;align-items:baseline;margin:16px 2px 6px;font-size:13px}
+  .lane-lbl .t{font-weight:700}
+  .lane-lbl .s{color:var(--muted);font-size:12px}
+  .lane-lbl .tps{font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .lane{position:relative;height:58px;background:var(--panel2);border:1px solid var(--border);
+        border-radius:10px;overflow:hidden}
+  .block{position:absolute;top:9px;bottom:9px;border-radius:4px;opacity:.22;filter:saturate(.35);
+         transition:opacity .12s linear,filter .12s linear}
+  .block.b-oh{background:var(--oh);min-width:5px}
+  .block.b-ex{background:#2f81f7}
+  .lane.graph .block.b-ex{background:var(--nvidia)}
+  .running .block{opacity:1;filter:none}
+  .notrans .block,.notrans .flag{transition:none!important}
+  .flag{position:absolute;top:50%;transform:translate(-50%,-50%) scale(.3);opacity:0;
+        background:#0a0e14;border:2px solid var(--work);color:var(--work);border-radius:999px;
+        font-size:15px;line-height:1;padding:5px 8px;transition:transform .25s cubic-bezier(.34,1.56,.64,1),opacity .2s}
+  .running .flag{opacity:1;transform:translate(-50%,-50%) scale(1)}
+  #ph{position:absolute;top:-4px;bottom:-4px;left:0;width:2px;background:#fff;border-radius:2px;
+      box-shadow:0 0 10px rgba(255,255,255,.8),0 0 26px rgba(255,255,255,.4);z-index:5;pointer-events:none}
+  .counts{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:22px}
+  .count{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:14px 18px;
+         display:flex;align-items:center;gap:16px}
+  .count b{font-family:var(--mono);font-size:30px;font-weight:700;min-width:44px}
+  .count.e b{color:#2f81f7} .count.g b{color:var(--nvidia)}
+  .count span{color:var(--muted);font-size:12.5px;line-height:1.45}
+  .race-sum{margin-top:18px;padding:14px 18px;border-radius:12px;background:var(--panel2);
+            border:1px solid var(--border);border-left:3px solid var(--nvidia);font-size:14.5px}
+  .race-sum b{color:var(--nvidia)}
+  .graph-code{margin-top:26px}
+  .caveat{margin-top:16px;padding:14px 18px;border-radius:12px;background:rgba(210,153,34,.07);
+          border:1px solid rgba(210,153,34,.35);font-size:14px}
+  .caveat b{color:#e3b341}
+
+  /* ---------- 5. strategies ---------- */
+  .strats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+  .strat{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:18px;
+         display:flex;flex-direction:column;gap:10px;position:relative}
+  .strat h3{margin:0;font-size:15.5px}
+  .strat p{margin:0;color:var(--muted);font-size:13px;line-height:1.55;flex:1}
+  .strat .mini{display:flex;align-items:center;gap:5px;flex-wrap:wrap;font-family:var(--mono);font-size:10.5px}
+  .strat .m{background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:2px 6px;color:var(--muted)}
+  .strat .m.hi{border-color:var(--work);color:var(--work);background:var(--work-dim)}
+  .strat .m.bad{border-color:rgba(255,144,64,.5);color:var(--oh)}
+  .strat .arr{color:var(--faint)}
+  .strat.star{border-color:var(--nvidia);box-shadow:0 0 0 1px var(--nvidia),0 10px 34px -12px rgba(118,185,0,.35)}
+  .strat .badge{position:absolute;top:-11px;right:12px;background:var(--nvidia);color:#0a0e14;
+                font-size:10px;font-weight:800;letter-spacing:.06em;border-radius:999px;padding:3px 10px;text-transform:uppercase}
+
+  footer{padding:44px 0 60px;border-top:1px solid var(--border)}
+  .formula{font-family:var(--mono);font-size:15px;color:var(--muted);text-align:center;padding:8px 0 4px}
+  .formula b{color:var(--oh)}
+  .fin{color:var(--faint);text-align:center;font-size:13px;margin-top:10px}
+
+  .reveal{opacity:0;transform:translateY(16px);transition:opacity .6s ease,transform .6s ease}
+  .reveal.in{opacity:1;transform:none}
+
+  @media(max-width:940px){
+    .steps{grid-template-columns:repeat(3,1fr)}
+    .brackets{grid-template-columns:1fr 1fr;grid-auto-flow:dense}
+    .calc{grid-template-columns:1fr}
+    .strats{grid-template-columns:1fr 1fr}
+    .dstats{grid-template-columns:1fr 1fr}
+    .dotgrid{grid-template-columns:repeat(24,1fr)}
+  }
+  @media(max-width:560px){
+    .steps{grid-template-columns:1fr 1fr}
+    .strats{grid-template-columns:1fr}
+    .counts{grid-template-columns:1fr}
+    .dotgrid{grid-template-columns:repeat(17,1fr)}
+  }
+  @media(prefers-reduced-motion:reduce){
+    *{transition:none!important;animation:none!important;scroll-behavior:auto}
+  }
+</style>
+</head>
+<body>
+
+<nav class="top"><div class="wrap">
+  <a href="#pipeline">① Anatomy of a launch</a>
+  <a href="#calc">② Overhead calculator</a>
+  <a href="#decode">③ The decode problem</a>
+  <a href="#race">④ Eager vs CUDA Graphs</a>
+  <a href="#strategies">⑤ Fixing it</a>
+</div></nav>
+
+<header><div class="wrap">
+  <div class="kicker">GPU Inference · LLM Decoding</div>
+  <h1>Kernel <span class="hl">Launch Overhead</span>:<br>why tiny kernels destroy decode throughput</h1>
+  <p class="sub">Every CUDA kernel launch pays a fixed 2–10 µs tax on the CPU side — before a single FLOP
+     happens. For big kernels it's a rounding error. For the hundreds of tiny kernels in every LLM decode
+     step, it quietly eats double-digit percentages of your throughput.</p>
+  <div class="chips">
+    <div class="chip c1"><b>~340</b><span>kernel launches per decoded token (7B model)</span></div>
+    <div class="chip c2"><b>2–10 µs</b><span>fixed cost per launch, CPU + driver side</span></div>
+    <div class="chip c3"><b>1.7 ms</b><span>pure launch overhead in a 10 ms step → 17%</span></div>
+  </div>
+</div></header>
+
+<!-- ============ 1. PIPELINE ============ -->
+<section id="pipeline"><div class="wrap reveal">
+  <div class="kicker">Section 1</div>
+  <h2><span class="n">01</span>Anatomy of one kernel launch</h2>
+  <p class="lead">When you call a CUDA kernel, the work doesn't start immediately. Six things happen —
+     and the first four happen on <em>every single launch</em>, no matter how trivial the kernel is.</p>
+
+  <div class="panel">
+    <div class="steps" id="pipeSteps">
+      <div class="step-card oh-side"><span class="no">1</span><div class="ic">🧮</div><div class="nm">CPU prepares parameters</div><div class="ds">Launch config, pointers, grid dims packed on host</div></div>
+      <div class="step-card oh-side"><span class="no">2</span><div class="ic">📨</div><div class="nm">Sent to GPU driver</div><div class="ds">Parameters cross the PCIe / driver boundary</div></div>
+      <div class="step-card oh-side"><span class="no">3</span><div class="ic">📋</div><div class="nm">Driver queues the kernel</div><div class="ds">Kernel lands in the async launch queue</div></div>
+      <div class="step-card oh-side"><span class="no">4</span><div class="ic">🗂️</div><div class="nm">Scheduler dispatches to SMs</div><div class="ds">GPU work distributor assigns thread blocks</div></div>
+      <div class="step-card work-side"><span class="no">5</span><div class="ic">⚡</div><div class="nm">Kernel executes</div><div class="ds">The only step that does your actual math</div></div>
+      <div class="step-card work-side"><span class="no">6</span><div class="ic">✅</div><div class="nm">Results become visible</div><div class="ds">Outputs observable to subsequent work / sync</div></div>
+    </div>
+    <div class="tl" id="pipeSegs">
+      <div class="tl-seg s-oh"></div><div class="tl-seg s-oh"></div><div class="tl-seg s-oh"></div><div class="tl-seg s-oh"></div>
+      <div class="tl-seg s-work"></div><div class="tl-seg s-done"></div>
+    </div>
+    <div class="brackets">
+      <div class="brk b-oh"><b>2–10 µs</b> launch overhead<span class="tag">every launch</span></div>
+      <div class="brk b-work"><b>µs → ms</b> useful work<span class="tag">variable</span></div>
+      <div class="brk b-done"><b>sync</b> visibility</div>
+    </div>
+  </div>
+  <p class="note">For a kernel that runs 100 µs, steps 1–4 are a rounding error. For a kernel that runs 1 µs, they're catastrophic.</p>
+
+  <pre class="code"><span class="c"># Measure it yourself: 10K single-element adds — compute ≈ 0, so we time pure launch overhead</span>
+x = torch.randn(<span class="n">1</span>, device=<span class="s">'cuda'</span>)
+torch.cuda.synchronize()
+start = time.perf_counter()
+<span class="k">for</span> _ <span class="k">in</span> <span class="f">range</span>(<span class="n">10000</span>):
+    y = x + <span class="n">1</span>
+torch.cuda.synchronize()
+overhead_us = (time.perf_counter() - start) / <span class="n">10000</span> * <span class="n">1e6</span>   <span class="c"># typical: 3–8 µs</span></pre>
+  <p class="code-hint">Typical result: 3–8 µs per launch — that's the fixed tax, measured.</p>
+</div></section>
+
+<!-- ============ 2. CALCULATOR ============ -->
+<section id="calc"><div class="wrap reveal">
+  <div class="kicker">Section 2 · Interactive</div>
+  <h2><span class="n">02</span>How bad is it for <em>your</em> kernel?</h2>
+  <p class="lead">Drag the sliders. The overhead share of a kernel's total wall time is
+     <code>launch / (launch + execute)</code> — and it explodes as kernels shrink.</p>
+
+  <div class="panel calc">
+    <div class="ctl">
+      <label>Launch overhead <span class="val" id="ohVal">5.0 µs</span></label>
+      <input type="range" id="ohRange" min="2" max="10" step="0.5" value="5">
+      <label>Kernel execution time <span class="val" id="exVal">100 µs</span></label>
+      <input type="range" id="exRange" min="0" max="100" step="0.5" value="88.4">
+      <div class="presets">
+        <button class="preset" data-us="1">tiny kernel · 1 µs</button>
+        <button class="preset" data-us="10">small kernel · 10 µs</button>
+        <button class="preset" data-us="100">big kernel · 100 µs</button>
+      </div>
+      <p class="note">Execution slider is logarithmic (0.5 → 200 µs).</p>
+    </div>
+    <div>
+      <div class="cbar"><div class="o" id="calcOh"></div><div class="e" id="calcEx"></div></div>
+      <div class="bigpct" id="pctVal">4.8%</div>
+      <div style="color:var(--muted);font-size:13px">of this kernel's wall time is launch overhead</div>
+      <div class="verdict v1" id="verdict">Rounding error — launch overhead is negligible here. Spend your optimization effort elsewhere.</div>
+      <div class="waste" id="waste1000">Per 1,000 launches: 5.0 ms wasted</div>
+    </div>
+  </div>
+</div></section>
+
+<!-- ============ 3. DECODE ============ -->
+<section id="decode"><div class="wrap reveal">
+  <div class="kicker">Section 3</div>
+  <h2><span class="n">03</span>The decode problem: ~340 launches <em>per token</em></h2>
+  <p class="lead">Autoregressive decoding of a 7B model is thousands of tiny memory-bound kernels.
+     Generating <em>one</em> token touches every layer's projections, norms, and glue ops:</p>
+
+  <div class="dstats">
+    <div class="dstat d1"><b>128</b><span>GEMV calls · 32 layers × 4 attention projections (Q, K, V, O)</span></div>
+    <div class="dstat d2"><b>96</b><span>GEMV calls · 32 layers × 3 FFN projections (gate, up, down)</span></div>
+    <div class="dstat d3"><b>64</b><span>norm calls · 32 layers × 2 normalizations</span></div>
+    <div class="dstat d4"><b>~50</b><span>miscellaneous · rotations, residuals, sampling, copies…</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="dotgrid" id="dotGrid"></div>
+    <div class="legend">
+      <span><i style="background:var(--attn)"></i>attention GEMV ×128</span>
+      <span><i style="background:var(--ffn)"></i>FFN GEMV ×96</span>
+      <span><i style="background:var(--norm)"></i>norms ×64</span>
+      <span><i style="background:var(--misc)"></i>misc ×~50</span>
+      <span style="margin-left:auto">each dot = one kernel launch = one launch tax</span>
+    </div>
+    <div class="mathline">
+      <b>340</b> launches <span>×</span> <b>5 µs</b> <span class="eq">=</span> <b style="color:var(--oh)">1.7 ms</b>
+      <span>of pure overhead — every token</span>
+    </div>
+    <div class="cmp">
+      <div class="lbl">eager decode step</div>
+      <div>
+        <div class="tbar">
+          <div class="oh-part" style="width:17%">1.7 ms overhead</div>
+          <div class="work-part" style="width:83%">8.3 ms actual compute</div>
+        </div>
+        <div class="ticks"><span>0 ms</span><span>10 ms — one token</span></div>
+      </div>
+    </div>
+    <div class="cmp">
+      <div class="lbl">with CUDA Graphs</div>
+      <div>
+        <div class="tbar small">
+          <div class="oh-part" style="width:3%"></div>
+          <div class="work-part" style="width:97%">same compute, launch tax ≈ 0</div>
+        </div>
+        <div class="ticks"><span>0 ms</span><span>≈ 8.5 ms — token arrives ~15% sooner</span></div>
+      </div>
+    </div>
+  </div>
+</div></section>
+
+<!-- ============ 4. RACE ============ -->
+<section id="race"><div class="wrap reveal">
+  <div class="kicker">Section 4 · Animation</div>
+  <h2><span class="n">04</span>Eager launches vs CUDA Graph replay</h2>
+  <p class="lead">A CUDA Graph records the entire decode step once — every kernel, allocation, and
+     dependency — then replays it with a single launch. Same kernels, same math, no per-kernel tax.</p>
+
+  <div class="panel">
+    <div class="race-head">
+      <button class="btn primary" id="replayBtn">▶ Replay</button>
+      <button class="btn" id="loopBtn">⏸ Pause loop</button>
+      <div class="tread">t = <b id="tRead">0.00 ms</b></div>
+    </div>
+    <div class="race-body" id="raceBody">
+      <div class="lane-lbl"><span class="t" style="color:#2f81f7">Eager mode</span>
+        <span class="s">every kernel pays the launch tax</span><span class="tps">≈ 100 tok/s</span></div>
+      <div class="lane eager" id="laneEager"></div>
+      <div class="lane-lbl"><span class="t" style="color:var(--nvidia)">CUDA Graph</span>
+        <span class="s">record once · replay with one launch</span><span class="tps">≈ 117 tok/s</span></div>
+      <div class="lane graph" id="laneGraph"></div>
+      <div id="ph"></div>
+    </div>
+    <div class="counts">
+      <div class="count e"><b id="tokE">0</b><span><b style="font-size:13px;color:var(--text)">tokens · eager</b><br>10.00 ms per token — 1.7 ms of it is waiting</span></div>
+      <div class="count g"><b id="tokG">0</b><span><b style="font-size:13px;color:var(--text)">tokens · graph</b><br>≈ 8.55 ms per token — overhead eliminated</span></div>
+    </div>
+    <div class="race-sum">Same 340 kernels. Same math. The graph finishes <b>~1.45 ms sooner per token</b> —
+      roughly <b>+17% decode throughput</b> from deleting waiting time alone.</div>
+    <p class="note">Illustrative: 22 blocks shown, each standing in for ~15 of the ~340 real launches.
+       Slow-motion ~550×. Blue = kernel executing, orange = launch overhead.</p>
+
+    <pre class="code graph-code">g = torch.cuda.<span class="f">CUDAGraph</span>()
+<span class="k">with</span> torch.cuda.<span class="f">graph</span>(g):
+    output = model.<span class="f">decode_step</span>(input, kv_cache)   <span class="c"># recorded once</span>
+
+<span class="k">for</span> token <span class="k">in</span> <span class="f">range</span>(max_tokens):
+    g.<span class="f">replay</span>()                                     <span class="c"># one launch, whole step</span></pre>
+    <div class="caveat"><b>⚠ The caveat:</b> graphs can't handle dynamic shapes. If batch size or sequence
+      length changes, you need a new graph. Production systems pre-record graphs for the shapes they
+      actually serve.</div>
+  </div>
+</div></section>
+
+<!-- ============ 5. STRATEGIES ============ -->
+<section id="strategies"><div class="wrap reveal">
+  <div class="kicker">Section 5</div>
+  <h2><span class="n">05</span>Four ways to fight launch overhead</h2>
+  <p class="lead">For inference, CUDA Graphs are the standard answer — but they're not the only tool.</p>
+
+  <div class="strats">
+    <div class="strat star">
+      <span class="badge">standard for inference</span>
+      <h3>CUDA Graphs</h3>
+      <p>Record the whole decode step once, replay it with a single launch. Per-kernel overhead drops to
+         near zero. Caveat: static shapes only — pre-record graphs for the shapes you serve.</p>
+      <div class="mini"><span class="m">record</span><span class="arr">→</span><span class="m hi">replay ▶▶▶</span><span class="arr">≈ 0 tax</span></div>
+    </div>
+    <div class="strat">
+      <h3>Kernel fusion</h3>
+      <p>Combine multiple small ops into one kernel. Instead of add then multiply, write a single fused
+         add-multiply kernel. Fewer launches <em>and</em> less memory traffic.</p>
+      <div class="mini"><span class="m bad">add</span><span class="arr">→</span><span class="m bad">mul</span><span class="arr">⇒</span><span class="m hi">fused add·mul</span></div>
+    </div>
+    <div class="strat">
+      <h3>Operator batching</h3>
+      <p>Instead of launching a separate norm kernel for every layer, batch all 32 norms into one kernel.
+         Same op, one launch instead of 32.</p>
+      <div class="mini"><span class="m bad">32 × norm</span><span class="arr">⇒</span><span class="m hi">1 × batched norm</span></div>
+    </div>
+    <div class="strat">
+      <h3>Persistent kernels</h3>
+      <p>Keep one kernel running and feed it work through shared memory or atomics. Advanced technique
+         for specific workloads — the kernel never exits, so it never relaunches.</p>
+      <div class="mini"><span class="m hi">kernel ⟳ resident</span><span class="arr">←</span><span class="m">work fed in</span></div>
+    </div>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <div class="formula">overhead share = <b>launches per step × launch cost</b> ÷ step time
+    &nbsp;→&nbsp; 340 × 5 µs ÷ 10 ms = <b>17%</b></div>
+  <div class="fin">Launch Overhead · part of the physics-llm-inference series · numbers illustrative of a 7B model decode step</div>
+</div></footer>
+
+<script>
+(function(){
+  "use strict";
+  var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ---------- reveal on scroll ---------- */
+  var io = new IntersectionObserver(function(es){
+    es.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add("in"); io.unobserve(e.target);} });
+  },{threshold:.12});
+  document.querySelectorAll(".reveal").forEach(function(el){ io.observe(el); });
+
+  /* ---------- 1. pipeline cycler ---------- */
+  var stepCards = Array.prototype.slice.call(document.querySelectorAll("#pipeSteps .step-card"));
+  var tlSegs    = Array.prototype.slice.call(document.querySelectorAll("#pipeSegs .tl-seg"));
+  var si = 0;
+  function tick(){ 
+    stepCards.forEach(function(c,i){ c.classList.toggle("active", i===si); });
+    tlSegs.forEach(function(s,i){ s.classList.toggle("active", i===si); s.style.color = getComputedStyle(s).backgroundColor; });
+    si = (si+1) % 6;
+  }
+  if(!reduceMotion){ tick(); setInterval(tick, 900); }
+  else { stepCards.forEach(function(c){c.classList.add("active");}); tlSegs.forEach(function(s){s.classList.add("active");}); }
+
+  /* ---------- 2. calculator ---------- */
+  var ohRange = document.getElementById("ohRange"),
+      exRange = document.getElementById("exRange"),
+      ohVal = document.getElementById("ohVal"),
+      exVal = document.getElementById("exVal"),
+      calcOh = document.getElementById("calcOh"),
+      calcEx = document.getElementById("calcEx"),
+      pctVal = document.getElementById("pctVal"),
+      verdictEl = document.getElementById("verdict"),
+      wasteEl = document.getElementById("waste1000");
+
+  function execFromSlider(t){ return 0.5 * Math.pow(400, t/100); }        // 0.5 → 200 µs, log
+  function sliderFromExec(e){ return 100 * Math.log(e/0.5) / Math.log(400); }
+  function fmtUs(v){ return v >= 10 ? v.toFixed(0) : v.toFixed(1); }
+
+  function updateCalc(){
+    var oh = parseFloat(ohRange.value), ex = execFromSlider(parseFloat(exRange.value));
+    var share = oh / (oh + ex) * 100;
+    ohVal.textContent = fmtUs(oh) + " µs";
+    exVal.textContent = fmtUs(ex) + " µs";
+    calcOh.style.width = Math.max(1.5, share) + "%";
+    calcEx.style.width = Math.min(98.5, 100 - Math.max(1.5, share)) + "%";
+    calcOh.textContent = share > 9 ? "launch" : "";
+    calcEx.textContent = "execute";
+    pctVal.textContent = share.toFixed(1) + "%";
+    wasteEl.textContent = "Per 1,000 launches: " + (oh).toFixed(1) + " ms wasted";
+
+    var cls, msg;
+    if(share < 5){ cls="v1"; msg="Rounding error — launch overhead is negligible here. Spend your optimization effort elsewhere."; }
+    else if(share < 15){ cls="v2"; msg="Getting noticeable — worth optimizing if this kernel is hot."; }
+    else if(share < 35){ cls="v3"; msg="Severe — overhead is eating a real chunk of your step budget."; }
+    else { cls="v4"; msg="Catastrophic — you're mostly launching kernels, not computing. This is decode in a nutshell."; }
+    verdictEl.className = "verdict " + cls;
+    verdictEl.textContent = msg;
+
+    document.querySelectorAll(".preset").forEach(function(b){
+      b.classList.toggle("on", Math.abs(execFromSlider(parseFloat(exRange.value)) - parseFloat(b.dataset.us)) < 0.05);
+    });
+  }
+  ohRange.addEventListener("input", updateCalc);
+  exRange.addEventListener("input", updateCalc);
+  document.querySelectorAll(".preset").forEach(function(b){
+    b.addEventListener("click", function(){ exRange.value = sliderFromExec(parseFloat(b.dataset.us)); updateCalc(); });
+  });
+  updateCalc();
+
+  /* ---------- 3. dot grid ---------- */
+  var cats = [["attn",128],["ffn",96],["norm",64],["misc",50]];
+  var colors = {attn:"#a78bfa", ffn:"#4dd0e1", norm:"#f472b6", misc:"#8b98a9"};
+  var grid = document.getElementById("dotGrid"), dots = [];
+  cats.forEach(function(c){
+    for(var i=0;i<c[1];i++){
+      var d = document.createElement("div");
+      d.className = "dot"; d.style.background = colors[c[0]]; d.style.color = colors[c[0]];
+      grid.appendChild(d); dots.push(d);
+    }
+  });
+  var dotsDone = false;
+  function lightDots(){
+    if(dotsDone) return; dotsDone = true;
+    if(reduceMotion){ dots.forEach(function(d){ d.classList.add("lit"); }); return; }
+    var t0 = performance.now(), PER = 6;
+    (function frame(now){
+      var n = Math.min(dots.length, Math.floor((now - t0) / PER));
+      for(var i=0;i<n;i++) dots[i].classList.add("lit");
+      if(n < dots.length) requestAnimationFrame(frame);
+    })(t0);
+  }
+  var io2 = new IntersectionObserver(function(es){
+    es.forEach(function(e){ if(e.isIntersecting){ lightDots(); io2.disconnect(); } });
+  },{threshold:.3});
+  io2.observe(grid);
+
+  /* ---------- 4. race ---------- */
+  var STEP_MS = 10, OH_TOTAL = 1.7, K = 22, GRAPH_LAUNCH = 0.25;
+  var SPEED = 0.55;                       // seconds per simulated ms
+  var laneEager = document.getElementById("laneEager"),
+      laneGraph = document.getElementById("laneGraph"),
+      raceBody = document.getElementById("raceBody"),
+      ph = document.getElementById("ph"),
+      tRead = document.getElementById("tRead"),
+      tokEEl = document.getElementById("tokE"),
+      tokGEl = document.getElementById("tokG"),
+      replayBtn = document.getElementById("replayBtn"),
+      loopBtn = document.getElementById("loopBtn");
+
+  function pctOf(ms){ return (ms / STEP_MS * 100) + "%"; }
+  function addBlock(lane, startMs, durMs, cls){
+    var b = document.createElement("div");
+    b.className = "block " + cls;
+    b.style.left = pctOf(startMs);
+    b.style.width = "calc(" + pctOf(durMs) + " - 1px)";
+    b.style.transitionDelay = (startMs * SPEED) + "s";
+    lane.appendChild(b);
+  }
+  function addFlag(lane, atMs){
+    var f = document.createElement("div");
+    f.className = "flag"; f.textContent = "✓ token";
+    f.style.left = pctOf(atMs);
+    f.style.transitionDelay = (atMs * SPEED) + "s";
+    lane.appendChild(f);
+  }
+
+  var ohK = OH_TOTAL / K, exK = (STEP_MS - OH_TOTAL) / K;
+  for(var i=0;i<K;i++){
+    var t0e = i * (ohK + exK);
+    addBlock(laneEager, t0e, ohK, "b-oh");
+    addBlock(laneEager, t0e + ohK, exK, "b-ex");
+  }
+  var t0g = GRAPH_LAUNCH;
+  addBlock(laneGraph, 0, GRAPH_LAUNCH, "b-oh");
+  for(var j=0;j<K;j++){ addBlock(laneGraph, t0g, exK, "b-ex"); t0g += exK; }
+  var graphEnd = GRAPH_LAUNCH + K * exK;   // ≈ 8.55 ms
+
+  addFlag(laneEager, STEP_MS);
+  addFlag(laneGraph, graphEnd);
+
+  var tokE = 0, tokG = 0, looping = !reduceMotion, running = false;
+  var timers = [], phAnim = null, readRAF = 0;
+
+  function clearTimers(){ timers.forEach(clearTimeout); timers = []; if(readRAF) cancelAnimationFrame(readRAF); if(phAnim) phAnim.cancel(); }
+  function resetRace(){
+    clearTimers();
+    raceBody.querySelectorAll(".lane").forEach(function(l){ l.classList.add("notrans"); l.classList.remove("running"); });
+    void raceBody.offsetWidth;
+    raceBody.querySelectorAll(".lane").forEach(function(l){ l.classList.remove("notrans"); });
+    ph.style.left = "0%"; tRead.textContent = "0.00 ms";
+  }
+  function readout(){
+    if(phAnim && phAnim.playState === "running"){
+      tRead.textContent = Math.min(STEP_MS, phAnim.currentTime / (SPEED * 1000)).toFixed(2) + " ms";
+      readRAF = requestAnimationFrame(readout);
+    }
+  }
+  function runRace(){
+    if(running) return; running = true;
+    resetRace();
+    requestAnimationFrame(function(){
+      requestAnimationFrame(function(){
+        raceBody.querySelectorAll(".lane").forEach(function(l){ l.classList.add("running"); });
+        phAnim = ph.animate([{left:"0%"},{left:"100%"}], {duration: STEP_MS * SPEED * 1000, easing:"linear", fill:"forwards"});
+        phAnim.play(); readRAF = requestAnimationFrame(readout);
+        timers.push(setTimeout(function(){ tokG++; tokGEl.textContent = tokG; }, graphEnd * SPEED * 1000));
+        timers.push(setTimeout(function(){ tokE++; tokEEl.textContent = tokE; }, STEP_MS * SPEED * 1000 + 120));
+        timers.push(setTimeout(function(){
+          running = false;
+          if(looping) timers.push(setTimeout(runRace, 1500));
+        }, STEP_MS * SPEED * 1000 + 400));
+      });
+    });
+  }
+  replayBtn.addEventListener("click", function(){ resetRace(); running = false; setTimeout(runRace, 60); });
+  loopBtn.addEventListener("click", function(){
+    looping = !looping;
+    loopBtn.textContent = looping ? "⏸ Pause loop" : "▶ Resume loop";
+    if(looping && !running) runRace();
+  });
+
+  if(reduceMotion){
+    raceBody.querySelectorAll(".lane").forEach(function(l){ l.classList.add("running"); });
+    ph.style.left = "100%"; tRead.textContent = "10.00 ms";
+    tokE = 3; tokG = 3; tokEEl.textContent = tokE; tokGEl.textContent = tokG;
+  } else {
+    var io3 = new IntersectionObserver(function(es){
+      es.forEach(function(e){ if(e.isIntersecting && !running && looping){ runRace(); io3.disconnect(); } });
+    },{threshold:.35});
+    io3.observe(raceBody);
+  }
+})();
+</script>
+</body>
+</html>

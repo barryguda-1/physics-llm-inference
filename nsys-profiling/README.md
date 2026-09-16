@@ -85,11 +85,44 @@ on container `kserve-container`, unprivileged, port 8080.
 ## Route 2 — vLLM predictor: built-in endpoints (no image change)
 
 vLLM exposes `POST /start_profile` and `POST /stop_profile` on the API server
-(root paths, no `/v1` prefix). **How they're enabled depends on the version:**
+(root paths, no `/v1` prefix). **How they're enabled depends on the version** —
+verified from source at each tag (Sep 2026):
 
-**vLLM ≤ ~0.11 (verified in v0.10.0 and v0.11.0 source):** the routes mount
-only if env `VLLM_TORCH_PROFILER_DIR` is set. Patch a *debug copy* of the
-InferenceService:
+| vLLM | Endpoint gate | What to set |
+|---|---|---|
+| ≤ 0.11 | env `VLLM_TORCH_PROFILER_DIR` mounts the routes | env var |
+| 0.12 | env `VLLM_TORCH_PROFILER_DIR` **or** `VLLM_TORCH_CUDA_PROFILE` | env var |
+| 0.13 – 0.15 | `--profiler-config` CLI; env vars still honored as fallbacks | either |
+| **0.16 – 0.29.0** | `--profiler-config` **only** — env vars removed | CLI JSON |
+
+**Confirmed at v0.29.0 specifically:** the routes live in
+`vllm/entrypoints/serve/profile/api_router.py`, are attached to the server via
+`register_vllm_serve_api_routers`, and mount only when
+`profiler_config.profiler` is set to one of `torch` / `cuda` / `proton`
+(vLLM 0.29.0's `ProfilerKind`). `--profiler-config` is the CLI arg
+(`vllm/engine/arg_utils.py`); `VLLM_TORCH_PROFILER_DIR` no longer exists
+anywhere in the tree. KServe master's `huggingfaceserver` image builds vLLM
+from source with `VLLM_VERSION=0.24.0` as the default pin — also in the
+config-only era, so on any recent KServe + vLLM deployment the CLI path below
+is *the* path; the env recipe only applies to legacy clusters on ≤ 0.15.
+
+**Config-only versions (0.16+, incl. 0.29.0)** — pass via `predictor.model.args`:
+
+```yaml
+      args:
+        - --profiler-config
+        - '{"profiler":"torch","torch_profiler_dir":"/mnt/traces","delay_iterations":20,"max_iterations":10}'
+```
+
+`ProfilerConfig` fields at 0.29.0 worth knowing: `delay_iterations` /
+`max_iterations` (skip warmup, cap length — the config-era equivalents of
+nsys `--delay/--duration`), `warmup_iterations` / `active_iterations` (torch
+profiler schedule), `capture_torch_profiler` (profile the CUDA-graph capture
+itself), and `torch_profiler_dir` accepts `s3://` / `gs://` URIs — skip the
+volume and ship traces straight to a bucket.
+
+**Legacy versions (≤ 0.11)** — routes mount only if env
+`VLLM_TORCH_PROFILER_DIR` is set. Patch a *debug copy* of the InferenceService:
 
 ```yaml
 spec:
@@ -107,15 +140,6 @@ spec:
 (Quick look, no volume needed: point it at `/dev/shm` — the runtime already
 mounts a Memory-backed emptyDir there — or `/tmp`.)
 
-**Current vLLM:** the env gate is replaced by a config arg, passed via
-`predictor.model.args`:
-
-```yaml
-      args:
-        - --profiler-config
-        - '{"profiler":"torch","torch_profiler_dir":"/mnt/traces","delay_iterations":20,"max_iterations":10}'
-```
-
 Caveat: ISVC-provided `args` may **replace** the runtime's args rather than
 append — after applying, verify the resolved result and repeat
 `--port=8080 --served-model-name=<name> --model=/mnt/models` if they vanished:
@@ -124,9 +148,6 @@ append — after applying, verify the resolved result and repeat
 kubectl get deploy -l serving.kserve.io/inferenceservice=<name> \
   -o jsonpath='{.items[0].spec.template.spec.containers[0].args}'
 ```
-
-Bonus: current vLLM's `torch_profiler_dir` accepts `s3://` / `gs://` URIs —
-skip the volume and ship traces straight to a bucket.
 
 **Capture a window:**
 
@@ -151,11 +172,16 @@ Drag one into <https://ui.perfetto.dev> — CPU ops, CUDA kernels, and gaps,
 which is everything the sheet's panels diagnose. For aggregate stats:
 `pip install hta` (Holistic Trace Analysis) gives the table-equivalent view.
 
-**The kernel-level upgrade path:** current vLLM's `"profiler":"cuda"` mode
-calls `torch.cuda.profiler.start()/stop()` behind those same HTTP endpoints —
-i.e. remote-controlled `cudaProfilerStart/Stop`. Combine with Route 1's nsys
+**The kernel-level upgrade path:** the `"profiler":"cuda"` mode (confirmed in
+v0.29.0's `vllm/profiler/wrapper.py`; env-triggered as
+`VLLM_TORCH_CUDA_PROFILE` back on v0.12) calls
+`torch.cuda.profiler.start()/stop()` behind those same HTTP endpoints — i.e.
+remote-controlled `cudaProfilerStart/Stop`. Combine with Route 1's nsys
 wrap + `--capture-range=cudaProfilerApi` and you can open an nsys capture
-window on a live server over HTTP.
+window on a live server over HTTP. vLLM even ships a helper for the analysis
+side: `tools/profiler/nsys_profile_tools/gputrc2graph.py` (in the repo, incl.
+v0.29.0) turns a `.nsys-rep` captured with `-t cuda` into kernel-level CSV/HTML
+summaries of GPU vs non-GPU time.
 
 ## Route 1 — any predictor: wrap the entrypoint with nsys
 
@@ -242,11 +268,17 @@ say the GPU itself is the problem.
 - KServe InferenceService CRD — `predictor.model.{args,env,command}` and
   full PodSpec container fields confirmed in
   `config/crd/full/serving.kserve.io_inferenceservices.yaml`
-- vLLM profiler endpoints — `vllm/entrypoints/serve/profile/api_router.py`
-  (current main, gated by `--profiler-config`) and
-  `vllm/entrypoints/openai/api_server.py` at v0.10.0/v0.11.0 (gated by
-  `VLLM_TORCH_PROFILER_DIR`); `"cuda"` mode in `vllm/profiler/wrapper.py`
-  calls `torch.cuda.profiler.start()/stop()`
+- vLLM profiler endpoints — version matrix verified from source at tags
+  v0.10.0, v0.11.0, v0.12.0, v0.13.0, v0.14.0, v0.15.1, v0.16.0, and
+  **v0.29.0**: routes at `vllm/entrypoints/serve/profile/api_router.py`
+  (attached via `register_vllm_serve_api_routers`), gated by
+  `profiler_config.profiler ∈ {torch, cuda, proton}` from 0.13 on, env-var
+  fallbacks (`VLLM_TORCH_PROFILER_DIR`, `VLLM_TORCH_CUDA_PROFILE`) removed
+  at 0.16; `"cuda"` mode in `vllm/profiler/wrapper.py` calls
+  `torch.cuda.profiler.start()/stop()`; `--profiler-config` registered in
+  `vllm/engine/arg_utils.py`; nsys helper `tools/profiler/nsys_profile_tools/`
+- KServe vLLM image — `python/huggingface_server.Dockerfile` (master) builds
+  vLLM from source, default `VLLM_VERSION=0.24.0`
 - PyTorch NVTX — <https://docs.pytorch.org/docs/2.14/cuda.html>:
   `torch.cuda.nvtx.range` / `range_push` / `range_pop` current, nothing
   deprecated
