@@ -1,0 +1,1007 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GEMM — Visual Explainer</title>
+<style>
+  :root{
+    --bg:#0a0e14; --panel:#101722; --panel2:#0c1220; --border:#1e2a3c;
+    --text:#dbe4ee; --muted:#7d8ca0; --faint:#4b5a6e;
+    --oh:#ff9040; --oh-dim:rgba(255,144,64,.16);
+    --work:#3fb950; --work-dim:rgba(63,185,80,.15);
+    --accent:#58a6ff; --red:#f85149; --amber:#e3b341; --nvidia:#76b900;
+    --mono:"Cascadia Code","JetBrains Mono",Consolas,ui-monospace,monospace;
+    --cs:36px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:16px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+       -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 22px}
+  code,.mono{font-family:var(--mono)}
+  a{color:var(--accent)}
+
+  /* ---------- header ---------- */
+  header{padding:64px 0 40px;position:relative;overflow:hidden}
+  header::before{content:"";position:absolute;inset:0;
+    background:
+      radial-gradient(600px 300px at 15% 0%,rgba(255,144,64,.10),transparent 60%),
+      radial-gradient(700px 340px at 85% 10%,rgba(88,166,255,.09),transparent 60%),
+      radial-gradient(500px 260px at 55% 100%,rgba(63,185,80,.06),transparent 60%);}
+  header .wrap{position:relative}
+  .kicker{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.16em;text-transform:uppercase}
+  h1{font-size:clamp(28px,5vw,44px);line-height:1.15;margin:10px 0 12px;letter-spacing:-.01em}
+  h1 .hl{color:var(--oh)}
+  .sub{color:var(--muted);max-width:780px;font-size:17px}
+  .chips{display:flex;gap:12px;flex-wrap:wrap;margin-top:26px}
+  .chip{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:12px 18px;min-width:150px}
+  .chip b{display:block;font-family:var(--mono);font-size:22px;font-weight:600}
+  .chip span{color:var(--muted);font-size:12.5px}
+  .chip.c1 b{color:var(--oh)} .chip.c2 b{color:var(--accent)} .chip.c3 b{color:var(--work)}
+
+  nav.top{position:sticky;top:0;z-index:50;background:rgba(10,14,20,.88);backdrop-filter:blur(8px);
+          border-bottom:1px solid var(--border)}
+  nav.top .wrap{display:flex;gap:22px;padding:10px 22px;overflow-x:auto}
+  nav.top a{color:var(--muted);text-decoration:none;font-size:13.5px;white-space:nowrap;padding:4px 0}
+  nav.top a:hover{color:var(--text)}
+
+  section{padding:62px 0;border-top:1px solid var(--border)}
+  h2{font-size:26px;margin:6px 0 8px;letter-spacing:-.01em}
+  h2 .n{color:var(--faint);font-family:var(--mono);font-size:18px;margin-right:10px}
+  .lead{color:var(--muted);max-width:820px;margin:0 0 28px}
+  .lead code{color:var(--text);background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:1px 6px;font-size:.85em}
+
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:22px}
+  .note{font-size:12.5px;color:var(--faint);margin-top:12px}
+  .caveat{margin-top:16px;padding:14px 18px;border-radius:12px;background:rgba(210,153,34,.07);
+          border:1px solid rgba(210,153,34,.35);font-size:14px}
+  .caveat b{color:var(--amber)}
+
+  pre.code{background:#080d15;border:1px solid var(--border);border-radius:12px;padding:16px 18px;
+           overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.6;margin:18px 0 0}
+  pre.code .k{color:#c586c0} pre.code .f{color:#dcdcaa} pre.code .s{color:#ce9178}
+  pre.code .c{color:#5a7a4a;font-style:italic} pre.code .n{color:#b5cea8}
+  .code-hint{color:var(--faint);font-size:12px;margin:8px 2px 0}
+
+  .btn{background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:9px;
+       padding:8px 16px;font-size:13.5px;cursor:pointer;transition:.2s;font-family:inherit}
+  .btn:hover{border-color:var(--accent)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#08111e;font-weight:700}
+
+  /* ---------- 1. anatomy ---------- */
+  .mats{display:flex;align-items:center;justify-content:center;gap:8px 22px;flex-wrap:wrap;padding:8px 0 4px}
+  .mgrp{display:flex;align-items:center;gap:8px}
+  .matwrap{display:flex;flex-direction:column;align-items:center;gap:8px}
+  .mlab{font-family:var(--mono);font-size:12.5px;color:var(--muted)}
+  .mlab b{color:var(--text)}
+  .mat{display:grid;gap:3px}
+  .mop{font-size:24px;color:var(--faint);padding:0 8px;align-self:center;font-family:var(--mono)}
+  .mcell{width:var(--cs);height:var(--cs);display:flex;align-items:center;justify-content:center;
+         border-radius:6px;font-family:var(--mono);font-size:14.5px;border:1px solid;
+         transition:background .16s,border-color .16s,transform .16s,box-shadow .16s;color:var(--faint)}
+  .ca{background:rgba(255,144,64,.10);border-color:rgba(255,144,64,.32)}
+  .cb{background:rgba(88,166,255,.10);border-color:rgba(88,166,255,.32)}
+  .cc{background:rgba(63,185,80,.07);border-color:rgba(63,185,80,.28);cursor:pointer}
+  .ca.hl{background:rgba(255,144,64,.32);border-color:var(--oh);color:#ffe2c4}
+  .cb.hl{background:rgba(88,166,255,.30);border-color:var(--accent);color:#d3e6ff}
+  .mcell.k{transform:scale(1.18);z-index:2;position:relative}
+  .ca.k{background:var(--oh);border-color:var(--oh);color:#0a0e14;font-weight:700;
+        box-shadow:0 0 0 2px rgba(255,144,64,.35),0 8px 20px -6px rgba(255,144,64,.55)}
+  .cb.k{background:var(--accent);border-color:var(--accent);color:#0a0e14;font-weight:700;
+        box-shadow:0 0 0 2px rgba(88,166,255,.35),0 8px 20px -6px rgba(88,166,255,.55)}
+  .cc.done{background:rgba(63,185,80,.24);border-color:rgba(63,185,80,.65);color:#8fe8a3;font-weight:700}
+  .cc.target{border-color:#e6edf3;box-shadow:0 0 0 1px #e6edf3}
+  @keyframes cellpop{0%{transform:scale(1)}45%{transform:scale(1.28)}100%{transform:scale(1)}}
+  .cc.pop{animation:cellpop .45s cubic-bezier(.34,1.56,.64,1)}
+  .mcontrols{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
+  .mprog{margin-left:auto;font-family:var(--mono);font-size:13px;color:var(--muted)}
+  .mprog b{color:var(--work)}
+  .readout{background:var(--panel2);border:1px solid var(--border);border-radius:12px;
+           padding:14px 18px;margin-top:16px;font-family:var(--mono);min-height:112px}
+  .rhead{font-family:system-ui,sans-serif;font-size:13px;color:var(--muted);margin-bottom:8px}
+  .rline{font-size:14.5px;line-height:1.8;color:var(--muted);min-height:26px;word-spacing:2px}
+  .rline .pa{color:var(--oh);font-weight:600} .rline .pb{color:var(--accent);font-weight:600}
+  .rline .ps{color:#9fd8ab} .rline .tot{color:var(--work);font-weight:700;font-size:16px}
+  .mlegend{display:flex;gap:18px;flex-wrap:wrap;margin-top:14px;font-size:12.5px;color:var(--muted)}
+  .mlegend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+
+  /* ---------- 2. cost calculator ---------- */
+  .calc{display:grid;grid-template-columns:1fr 1.15fr;gap:22px;align-items:stretch}
+  .ctl label{display:block;font-size:13px;color:var(--muted);margin:18px 0 6px}
+  .ctl label:first-child{margin-top:0}
+  .ctl .val{float:right;font-family:var(--mono);color:var(--text)}
+  input[type=range]{width:100%;accent-color:var(--oh);height:26px}
+  .presets{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+  .preset{background:var(--panel2);border:1px solid var(--border);color:var(--muted);border-radius:999px;
+          padding:5px 14px;font-size:12.5px;cursor:pointer;font-family:var(--mono);transition:.2s}
+  .preset:hover{color:var(--text);border-color:var(--accent)}
+  .preset.on{color:#08111e;background:var(--accent);border-color:var(--accent);font-weight:700}
+  .cstats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .cstat{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:12px 14px;border-top:3px solid var(--faint)}
+  .cstat b{font-family:var(--mono);font-size:21px;font-weight:600;display:block}
+  .cstat span{color:var(--muted);font-size:11.5px;line-height:1.4;display:block;margin-top:3px}
+  .cstat.s1{border-top-color:var(--oh)} .cstat.s1 b{color:var(--oh)}
+  .cstat.s2{border-top-color:var(--accent)} .cstat.s2 b{color:var(--accent)}
+  .cstat.s3{border-top-color:var(--work)} .cstat.s3 b{color:var(--work)}
+  .verdict{margin-top:12px;padding:12px 16px;border-radius:10px;background:var(--panel2);
+           border-left:3px solid var(--faint);font-size:14px}
+  .verdict.good{border-color:var(--work);color:#7ee2a0}
+  .verdict.bad{border-color:var(--red);color:#ff8a84}
+  .dbl{color:var(--muted);font-size:12.5px;margin-top:10px;font-family:var(--mono)}
+  .chartbox{grid-column:1 / -1;border-top:1px solid var(--border);margin-top:6px;padding-top:16px}
+  .chart{width:100%;height:auto;display:block}
+  .chart text{fill:var(--muted);font-family:var(--mono);font-size:10px}
+  .chart .tk{fill:var(--faint)}
+  .chart .axl{fill:var(--muted);font-size:11px}
+  .chart .gridline{stroke:rgba(255,255,255,.05)}
+  .chart .axis{stroke:var(--border)}
+  .chart .dash{stroke-dasharray:4 4}
+
+  /* ---------- 3. roofline ---------- */
+  .rooftop{display:grid;grid-template-columns:1.25fr 1fr;gap:22px;align-items:stretch}
+  .rstats{display:flex;flex-direction:column;gap:10px}
+  .rstat{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:12px 16px;
+         display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+  .rstat span{color:var(--muted);font-size:12.5px}
+  .rstat b{font-family:var(--mono);font-size:19px;font-weight:600}
+  .rstat.r1 b{color:var(--accent)} .rstat.r2 b{color:var(--oh)} .rstat.r3 b{color:var(--muted)}
+  .formula-strip{font-family:var(--mono);font-size:13px;color:var(--muted);text-align:center;
+                 padding:8px 0 2px}
+  .formula-strip b{color:var(--text)}
+  .vchip{display:inline-block;font-size:11px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;
+         border-radius:6px;padding:3px 10px}
+  .vchip.mb{background:rgba(248,81,73,.14);color:#ff8a84;border:1px solid rgba(248,81,73,.45)}
+  .vchip.cb2{background:var(--work-dim);color:#7ee2a0;border:1px solid rgba(63,185,80,.5)}
+
+  /* ---------- 4. bench ---------- */
+  .brow{display:grid;grid-template-columns:150px 1fr 215px;align-items:center;gap:14px;margin:10px 0}
+  .brow .lbl{font-family:var(--mono);font-size:12.5px;color:var(--muted);text-align:right}
+  .brow .lbl b{color:var(--text);display:block;font-size:13px}
+  .bbar{height:28px;background:var(--panel2);border:1px solid var(--border);border-radius:8px;overflow:hidden;position:relative}
+  .bfill{height:100%;width:0;transition:width .9s cubic-bezier(.2,.7,.3,1);border-radius:7px 0 0 7px}
+  .brow.in .bfill{width:var(--w)}
+  .bfill.f-sparse{background:#8b98a9} .bfill.f-dense{background:#1f6feb}
+  .bfill.f-m1{background:#6ee7b7} .bfill.f-m2{background:var(--work)} .bfill.f-m3{background:#34d399}
+  .brow .val{font-family:var(--mono);font-size:12.5px;color:var(--muted);line-height:1.5}
+  .brow .val b{color:var(--text);font-size:15px}
+  .bplateau{margin-top:14px;color:var(--muted);font-size:13.5px}
+  .bplateau b{color:var(--work)}
+
+  /* ---------- 5. transformer ---------- */
+  .sites{border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:26px}
+  .srow{display:grid;grid-template-columns:1.15fr 1.5fr 1fr;gap:12px;padding:11px 16px;
+        background:var(--panel2);border-bottom:1px solid var(--border);font-size:13px;align-items:center}
+  .srow:last-child{border-bottom:none}
+  .srow.hd{background:transparent;color:var(--faint);font-size:11px;letter-spacing:.08em;
+           text-transform:uppercase;font-weight:700}
+  .srow .nm{font-weight:600}
+  .srow .sh{font-family:var(--mono);color:var(--accent);font-size:12.5px}
+  .srow .per{color:var(--muted);font-size:12px}
+  .mexp{display:grid;grid-template-columns:1fr 1.4fr;gap:22px;align-items:stretch}
+  .mtbl{border:1px solid var(--border);border-radius:12px;overflow:hidden;align-self:start}
+  .mrow{display:grid;grid-template-columns:1.1fr .9fr .9fr 1fr;gap:8px;padding:10px 14px;
+        background:var(--panel2);border-bottom:1px solid var(--border);font-size:12.5px;align-items:center}
+  .mrow:last-child{border-bottom:none}
+  .mrow.hd{background:transparent;color:var(--faint);font-size:10.5px;letter-spacing:.07em;
+           text-transform:uppercase;font-weight:700}
+  .mrow .op{font-weight:600}
+  .mrow .ai,.mrow .at{font-family:var(--mono);color:var(--text)}
+  .mnote{padding:10px 14px;font-size:12px;color:var(--faint);background:var(--panel2);
+         border-top:1px solid var(--border)}
+  .pdgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:26px}
+  .pdcard{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:18px;position:relative}
+  .pdcard h3{margin:0 0 4px;font-size:15.5px}
+  .pdcard .tag{position:absolute;top:-11px;right:12px;font-size:10px;font-weight:800;letter-spacing:.06em;
+               border-radius:999px;padding:3px 10px;text-transform:uppercase}
+  .pdcard ul{margin:10px 0 0;padding-left:18px;color:var(--muted);font-size:13px;line-height:1.7}
+  .pdcard ul b{color:var(--text)}
+  .pdcard.pf{border-color:rgba(63,185,80,.45)}
+  .pdcard.pf h3{color:var(--work)} .pdcard.pf .tag{background:var(--work);color:#0a0e14}
+  .pdcard.dc{border-color:rgba(255,144,64,.45)}
+  .pdcard.dc h3{color:var(--oh)} .pdcard.dc .tag{background:var(--oh);color:#0a0e14}
+
+  footer{padding:44px 0 60px;border-top:1px solid var(--border)}
+  .formula{font-family:var(--mono);font-size:15px;color:var(--muted);text-align:center;padding:8px 0 4px}
+  .formula b{color:var(--oh)}
+  .fin{color:var(--faint);text-align:center;font-size:13px;margin-top:10px}
+
+  .reveal{opacity:0;transform:translateY(16px);transition:opacity .6s ease,transform .6s ease}
+  .reveal.in{opacity:1;transform:none}
+
+  @media(max-width:940px){
+    .calc{grid-template-columns:1fr}
+    .rooftop{grid-template-columns:1fr}
+    .mexp{grid-template-columns:1fr}
+    .pdgrid{grid-template-columns:1fr}
+    .cstats{grid-template-columns:1fr 1fr 1fr}
+    :root{--cs:30px}
+  }
+  @media(max-width:560px){
+    .cstats{grid-template-columns:1fr}
+    .srow{grid-template-columns:1fr 1fr}
+    .srow.hd{display:none}
+    .mrow{grid-template-columns:1fr 1fr;row-gap:4px}
+    .mrow.hd{display:none}
+    :root{--cs:24px}
+    .brow{grid-template-columns:92px 1fr;row-gap:2px}
+    .brow .val{grid-column:1 / -1}
+    .brow .lbl{text-align:left}
+  }
+  @media(prefers-reduced-motion:reduce){
+    *{transition:none!important;animation:none!important;scroll-behavior:auto}
+  }
+</style>
+</head>
+<body>
+
+<nav class="top"><div class="wrap">
+  <a href="#anatomy">① What is GEMM</a>
+  <a href="#cost">② n³ math vs n² memory</a>
+  <a href="#roofline">③ Compute- or memory-bound?</a>
+  <a href="#bench">④ H100 reality check</a>
+  <a href="#transformer">⑤ GEMM in a transformer</a>
+</div></nav>
+
+<header><div class="wrap">
+  <div class="kicker">GPU Inference · LLM Math</div>
+  <h1><span class="hl">GEMM</span>: why matrix multiply is<br>the workhorse of deep learning</h1>
+  <p class="sub">C&nbsp;=&nbsp;A&nbsp;@&nbsp;B is one line of code and nearly all of a transformer's math.
+     This page builds the intuition from scratch: what one output element costs, why FLOPs grow as
+     n³ but memory only as n², and why that makes big GEMMs compute-bound on an H100 — which is
+     exactly why prefill and decode behave so differently.</p>
+  <div class="chips">
+    <div class="chip c1"><b>137 GFLOP</b><span>in a single 4096³ matmul — 2·n³ FLOPs</span></div>
+    <div class="chip c2"><b>1365</b><span>FLOPs per byte at n=4096 (fp16) — the text's "~1350"</span></div>
+    <div class="chip c3"><b>597</b><span>H100 ridge = 2000 TFLOPS ÷ 3.35 TB/s — GEMM clears it</span></div>
+  </div>
+</div></header>
+
+<!-- ============ 1. ANATOMY ============ -->
+<section id="anatomy"><div class="wrap reveal">
+  <div class="kicker">Section 1 · Animation</div>
+  <h2><span class="n">01</span>One output element = one dot product</h2>
+  <p class="lead">Strip away the jargon and a matmul is a machine for computing <em>dot products</em>:
+     to fill in one cell of C, take a row of A, a column of B, multiply them pairwise, and add up
+     the K results. That's it. Watch it happen cell by cell — then remember the GPU computes all
+     cells at once.</p>
+
+  <div class="panel">
+    <div class="mcontrols">
+      <button class="btn primary" id="playBtn">▶ Play</button>
+      <button class="btn" id="stepBtn">Step ⏭</button>
+      <button class="btn" id="randBtn">🎲 New numbers</button>
+      <div class="mprog" id="progEl">0 / 16 output cells done</div>
+    </div>
+
+    <div class="mats">
+      <div class="mgrp">
+        <div class="matwrap">
+          <div class="mat" id="gridA"></div>
+          <div class="mlab"><b>A</b> · (4, 6)</div>
+        </div>
+        <div class="mop">@</div>
+        <div class="matwrap">
+          <div class="mat" id="gridB"></div>
+          <div class="mlab"><b>B</b> · (6, 4)</div>
+        </div>
+      </div>
+      <div class="mgrp">
+        <div class="mop">=</div>
+        <div class="matwrap">
+          <div class="mat" id="gridC"></div>
+          <div class="mlab"><b>C</b> · (4, 4) — click a cell to jump</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="readout">
+      <div class="rhead" id="rHead">press ▶ Play — or click any empty cell of C</div>
+      <div class="rline" id="rProd"></div>
+      <div class="rline" id="rSum"></div>
+    </div>
+
+    <div class="mlegend">
+      <span><i style="background:var(--oh)"></i>row i of A — reused for every column of C</span>
+      <span><i style="background:var(--accent)"></i>column j of B — reused for every row of C</span>
+      <span><i style="background:var(--work)"></i>C[i,j] — K multiply-adds, written once</span>
+    </div>
+    <p class="note">This toy has arithmetic intensity 192 FLOPs ÷ 128 bytes = <b>1.5 FLOP/byte</b> — memory-bound!
+       Real model GEMMs (n = 4096) reach 1365. Matrix <em>size</em> is what makes GEMM compute-bound — that's section 2.</p>
+  </div>
+
+  <pre class="code"><span class="c"># the whole operation, in one line of torch</span>
+c = torch.<span class="f">matmul</span>(a, b)          <span class="c"># a: (M, K)  b: (K, N)  ->  c: (M, N)</span>
+
+<span class="c"># what each output element really is:</span>
+c[i, j] = <span class="f">sum</span>(a[i, k] * b[k, j] <span class="k">for</span> k <span class="k">in</span> <span class="f">range</span>(K))   <span class="c"># K multiply-adds</span></pre>
+  <p class="code-hint">Total cost: M·N dot products, each K long → 2·M·N·K FLOPs. At 4096³ that's 137 billion FLOPs —
+     16.7 million dot products, 4096 deep, in one op.</p>
+</div></section>
+
+<!-- ============ 2. COST ============ -->
+<section id="cost"><div class="wrap reveal">
+  <div class="kicker">Section 2 · Interactive</div>
+  <h2><span class="n">02</span>The exponents do the magic: n³ math, n² memory</h2>
+  <p class="lead">Work grows with <code>n³</code> — every new row and column multiplies against everything
+     else. But the data only grows with <code>n²</code> — you read A, read B, write C, once. Bigger
+     matrices mean more math per byte hauled from memory. Drag n and watch the gap blow open.</p>
+
+  <div class="panel calc">
+    <div class="ctl">
+      <label>matrix size n (square, fp16) <span class="val" id="nVal">n = 4096</span></label>
+      <input type="range" id="nRange" min="0" max="100" step="any" value="79.2">
+      <div class="presets" id="nPresets">
+        <button class="preset" data-n="512">512³</button>
+        <button class="preset" data-n="1024">1024³</button>
+        <button class="preset" data-n="2048">2048³</button>
+        <button class="preset" data-n="4096">4096³</button>
+        <button class="preset" data-n="8192">8192³</button>
+      </div>
+      <p class="note">Slider is logarithmic, 256 → 16384.</p>
+    </div>
+    <div>
+      <div class="cstats">
+        <div class="cstat s1"><b id="fVal">137.4 GFLOP</b><span>FLOPs = 2·n³ (multiply + add)</span></div>
+        <div class="cstat s2"><b id="bVal">100.7 MB</b><span>traffic = 2·(n² + n² + n²) bytes — read A, B · write C</span></div>
+        <div class="cstat s3"><b id="aiVal">1365</b><span>FLOPs per byte = arithmetic intensity</span></div>
+      </div>
+      <div class="verdict good" id="verd2">compute-bound — clears the H100 ridge (597 FLOP/byte); tensor cores, not HBM, are the limit</div>
+      <div class="dbl" id="dbl2">vs n = 2048: FLOPs ×8 · memory ×4 · intensity ×2</div>
+    </div>
+    <div class="chartbox">
+      <svg id="costChart" class="chart" viewBox="0 0 560 258" role="img" aria-label="compute grows as n cubed while memory grows as n squared"></svg>
+      <p class="note" style="text-align:center">both curves are relative to n = 256 (log–log). Doubling n multiplies the orange
+         curve by 8 but the blue one by only 4 — the widening gap <em>is</em> the arithmetic intensity.</p>
+    </div>
+  </div>
+</div></section>
+
+<!-- ============ 3. ROOFLINE ============ -->
+<section id="roofline"><div class="wrap reveal">
+  <div class="kicker">Section 3 · Interactive</div>
+  <h2><span class="n">03</span>Two ceilings: which one do you hit?</h2>
+  <p class="lead">Every GPU has a math ceiling (TFLOPS of tensor cores) and a byte ceiling (TB/s of HBM).
+     Your operation's arithmetic intensity — FLOPs per byte — decides which one you hit first.
+     On an H100 SXM the tipping point (the <em>ridge</em>) is 2000&nbsp;TFLOPS&nbsp;÷&nbsp;3.35&nbsp;TB/s
+     = <b>597 FLOPs per byte</b>. GEMM at n=4096 sits at 1365 — comfortably on the compute side.</p>
+
+  <div class="panel">
+    <div class="rooftop">
+      <div>
+        <svg id="roofChart" class="chart" viewBox="0 0 560 330" role="img" aria-label="H100 roofline: attainable TFLOPS versus arithmetic intensity"></svg>
+      </div>
+      <div class="rstats">
+        <label style="font-size:13px;color:var(--muted)">arithmetic intensity
+          <span class="val mono" style="float:right;color:var(--text)" id="aiVal3">1365 FLOP/byte</span></label>
+        <input type="range" id="aiRange" min="0" max="100" step="any" value="78.25" style="accent-color:var(--accent)">
+        <div class="presets" id="aiPresets" style="margin-top:4px">
+          <button class="preset" data-ai="0.25">z = x + y</button>
+          <button class="preset" data-ai="1">GEMV · M=1</button>
+          <button class="preset" data-ai="171">512³</button>
+          <button class="preset" data-ai="341">1024³</button>
+          <button class="preset" data-ai="683">2048³</button>
+          <button class="preset" data-ai="1365">4096³</button>
+          <button class="preset" data-ai="2731">8192³</button>
+        </div>
+        <div class="rstat r1"><span>attainable performance<br>min(2000, 3.35 × AI)</span><b id="attVal3">2000 TFLOPS</b></div>
+        <div class="rstat r3"><span>share of the 2000 TFLOPS roof</span><b id="pctVal3">100%</b></div>
+        <div class="rstat r2"><span>the limiter</span><b id="limVal3">tensor cores</b></div>
+        <div class="verdict good" id="verd3" style="margin-top:0">compute-bound — you pay FLOPs, not bytes</div>
+        <p class="note">Square fp16 GEMM: AI = n/3, so GEMM turns compute-bound once n ≳ 1791
+           (n ≳ 886 against the dense peak — see the caveat below).</p>
+      </div>
+    </div>
+    <div class="formula-strip">ridge point = <b>peak TFLOPS ÷ memory TB/s</b> = 2000 ÷ 3.35 = <b>597 FLOP/byte</b>
+      &nbsp;·&nbsp; left of the ridge you pay bytes, right of it you pay FLOPs</div>
+
+    <div class="caveat"><b>⚠ A note on "2000 TFLOPS":</b> that's the H100 SXM <em>with-sparsity</em> peak.
+      Dense fp16 tensor peak is 989.5 TFLOPS → dense ridge ≈ 295 FLOP/byte. Either way, a 4096³ GEMM
+      (AI 1365) clears the ridge by a wide margin — the conclusion doesn't change, only the utilization
+      percentage does (section 4).</div>
+  </div>
+</div></section>
+
+<!-- ============ 4. BENCH ============ -->
+<section id="bench"><div class="wrap reveal">
+  <div class="kicker">Section 4</div>
+  <h2><span class="n">04</span>H100 reality check: 709 TFLOPS at 4096³</h2>
+  <p class="lead">Theory says a 4096³ GEMM could touch the full compute roof. Measured
+     <code>torch.matmul</code> on an H100 SXM lands at 709 TFLOPS. Whether that's "35%" or "72% of peak"
+     depends on which denominator you use — the text's 2000 is the with-sparsity figure.</p>
+
+  <div class="panel">
+    <div id="benchRows">
+      <div class="brow" style="--w:99%">
+        <div class="lbl"><b>sparse peak</b>the text's "2000"</div>
+        <div class="bbar"><div class="bfill f-sparse"></div></div>
+        <div class="val"><b>1979</b> TFLOPS · fp16 tensor, with sparsity</div>
+      </div>
+      <div class="brow" style="--w:50%">
+        <div class="lbl"><b>dense peak</b>the real ceiling</div>
+        <div class="bbar"><div class="bfill f-dense"></div></div>
+        <div class="val"><b>989.5</b> TFLOPS · fp16 tensor, dense</div>
+      </div>
+      <div class="brow" style="--w:31%">
+        <div class="lbl"><b>2048³</b>torch.matmul</div>
+        <div class="bbar"><div class="bfill f-m1"></div></div>
+        <div class="val"><b>617</b> TFLOPS · 31% of 2000 · 62% of dense</div>
+      </div>
+      <div class="brow" style="--w:36%">
+        <div class="lbl"><b>4096³</b>torch.matmul</div>
+        <div class="bbar"><div class="bfill f-m2"></div></div>
+        <div class="val"><b>709</b> TFLOPS · 35% of 2000 · 72% of dense</div>
+      </div>
+      <div class="brow" style="--w:35%">
+        <div class="lbl"><b>8192³</b>torch.matmul</div>
+        <div class="bbar"><div class="bfill f-m3"></div></div>
+        <div class="val"><b>686</b> TFLOPS · 34% of 2000 · 69% of dense</div>
+      </div>
+    </div>
+    <div class="bplateau">Performance scales with matrix size, then <b>plateaus around 4096³</b> — bigger
+      stops helping. ~70% of the dense peak is a healthy figure for cuBLAS-class kernels; the remaining
+      ~30% goes to tiling edge effects, partial tensor-core tiles, and DRAM latency. Production inference
+      stacks use tuned kernels in the same league.</div>
+
+    <pre class="code"><span class="k">def</span> <span class="f">benchmark_gemm</span>(m, n, k):
+    a = torch.<span class="f">randn</span>(m, k, dtype=torch.<span class="s">float16</span>, device=<span class="s">'cuda'</span>)
+    b = torch.<span class="f">randn</span>(k, n, dtype=torch.<span class="s">float16</span>, device=<span class="s">'cuda'</span>)
+    torch.cuda.<span class="f">synchronize</span>()
+    start = time.<span class="f">perf_counter</span>()
+    <span class="k">for</span> _ <span class="k">in</span> <span class="f">range</span>(<span class="n">100</span>):
+        c = torch.<span class="f">matmul</span>(a, b)
+    torch.cuda.<span class="f">synchronize</span>()
+    <span class="k">return</span> <span class="n">2</span> * m * n * k * <span class="n">100</span> / (time.<span class="f">perf_counter</span>() - start) / <span class="n">1e12</span>
+
+<span class="c"># H100 SXM, fp16 tensor:   2048³ -> 617 · 4096³ -> 709 · 8192³ -> 686 TFLOPS</span></pre>
+    <p class="code-hint">The GPU is busy 100% of the time in all three cases — the plateau means per-FLOP
+       efficiency peaks near 4096, not that the GPU gave up.</p>
+  </div>
+</div></section>
+
+<!-- ============ 5. TRANSFORMER ============ -->
+<section id="transformer"><div class="wrap reveal">
+  <div class="kicker">Section 5</div>
+  <h2><span class="n">05</span>GEMM in a transformer: same weights, different M</h2>
+  <p class="lead">Where does GEMM actually run in an LLM? Almost everywhere — every projection in every
+     layer (shapes below are Llama-7B). What differs between prefill and decode is not the weight
+     matrices but <em>M</em>, the number of tokens in flight — and M alone flips each op between
+     compute-bound GEMM and memory-bound GEMV.</p>
+
+  <div class="sites">
+    <div class="srow hd"><span>where</span><span>GEMM shape</span><span>how often</span></div>
+    <div class="srow"><span class="nm">Q, K, V projections</span><span class="sh">(M, 4096) @ (4096, 4096)</span><span class="per">×3 · 32 layers</span></div>
+    <div class="srow"><span class="nm">attention out proj</span><span class="sh">(M, 4096) @ (4096, 4096)</span><span class="per">×1 · 32 layers</span></div>
+    <div class="srow"><span class="nm">FFN gate + up</span><span class="sh">(M, 4096) @ (4096, 11008)</span><span class="per">×2 · 32 layers</span></div>
+    <div class="srow"><span class="nm">FFN down</span><span class="sh">(M, 11008) @ (11008, 4096)</span><span class="per">×1 · 32 layers</span></div>
+    <div class="srow"><span class="nm">LM head</span><span class="sh">(M, 4096) @ (4096, 32000)</span><span class="per">×1 per step</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="mexp">
+      <div class="ctl">
+        <label>tokens in flight <span class="val" id="mVal">M = 4096</span></label>
+        <input type="range" id="mRange" min="0" max="100" step="any" value="75">
+        <div class="presets" id="mPresets">
+          <button class="preset" data-m="1">b=1 · decode</button>
+          <button class="preset" data-m="64">b=64</button>
+          <button class="preset" data-m="512">b=512</button>
+          <button class="preset" data-m="4096">prefill 4K</button>
+        </div>
+        <p class="note">M = batch × seq_len. Prefill processes a whole prompt at once (M in the
+           thousands); decode emits one token per sequence per step (M = batch, often 1).</p>
+        <p class="note" style="color:var(--muted)">While M is small, intensity ≈ M: each extra token in
+           flight buys ~1 FLOP per byte of weights streamed. That's why batching is free throughput.</p>
+      </div>
+      <div class="mtbl">
+        <div class="mrow hd"><span>op</span><span>intensity</span><span>attainable</span><span>verdict</span></div>
+        <div class="mrow"><span class="op">QKV proj</span><span class="ai" id="aiQ">1365</span><span class="at" id="atQ">2000 TF</span><span id="vQ"></span></div>
+        <div class="mrow"><span class="op">FFN gate/up</span><span class="ai" id="aiF">1727</span><span class="at" id="atF">2000 TF</span><span id="vF"></span></div>
+        <div class="mrow"><span class="op">LM head</span><span class="ai" id="aiL">1925</span><span class="at" id="atL">2000 TF</span><span id="vL"></span></div>
+        <div class="mnote" id="mNote">M = 4096: every projection is a big GEMM — compute-bound.</div>
+      </div>
+    </div>
+
+    <div class="pdgrid">
+      <div class="pdcard pf">
+        <span class="tag">GEMM territory</span>
+        <h3>Prefill · M = batch × seq_len</h3>
+        <ul>
+          <li>a 4K-token prompt → <b>M = 4096</b></li>
+          <li>intensity 1365–1925 → <b>every GEMM compute-bound</b></li>
+          <li>step cost ≈ FLOPs ÷ attainable TFLOPS — the tensor cores are the resource to optimize</li>
+          <li><b>prefill is dominated by GEMM</b> — this whole page is the prefill cost model</li>
+        </ul>
+      </div>
+      <div class="pdcard dc">
+        <span class="tag">GEMV territory</span>
+        <h3>Decode · M = batch (often 1)</h3>
+        <ul>
+          <li>same weight matrices, M = 1 → <b>intensity ≈ 1</b></li>
+          <li>memory roof caps you at ~3.4 TFLOPS — <b>~0.2% of the compute roof</b></li>
+          <li>each token waits for the weights to stream from HBM; tensor cores idle</li>
+          <li>that's a <b>GEMV</b> — a different beast with its own chapter (<a href="../gemv/gemv.png">chart</a>)</li>
+        </ul>
+      </div>
+    </div>
+    <p class="note" style="font-size:14px;color:var(--muted);margin-top:18px">The matrix didn't change.
+      The ratio of math to bytes did. Batch decode hard enough (b = 512+) and the GEMVs turn back into
+      GEMMs — that's the whole game in serving.</p>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <div class="formula">intensity (fp16) = 2n³ FLOPs ÷ 6n² bytes = <b>n/3</b> FLOP/byte
+    &nbsp;→&nbsp; ridge = 2000 ÷ 3.35 = <b>597</b> &nbsp;→&nbsp; n ≥ ~1791 ⇒ compute-bound</div>
+  <div class="fin">GEMM · part of the physics-llm-inference series · figures from the chapter text;
+    H100 SXM peaks per NVIDIA datasheet: 989.5 dense / 1979 with-sparsity TFLOPS · 3.35 TB/s HBM3</div>
+</div></footer>
+
+<script>
+(function(){
+"use strict";
+var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/* ---------- reveal on scroll ---------- */
+var io = new IntersectionObserver(function(es){
+  es.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add("in"); io.unobserve(e.target);} });
+},{threshold:.12});
+document.querySelectorAll(".reveal").forEach(function(el){ io.observe(el); });
+
+/* =========================================================
+   1. ANATOMY — animated dot product
+   ========================================================= */
+var M=4, K=6, N=4;
+var gridA=document.getElementById("gridA"),
+    gridB=document.getElementById("gridB"),
+    gridC=document.getElementById("gridC");
+var cellA=[], cellB=[], cellC=[], A=[], B=[];
+
+function el(tag, cls, txt){
+  var e=document.createElement(tag);
+  if(cls) e.className=cls;
+  if(txt!==undefined) e.textContent=txt;
+  return e;
+}
+function rand9(){ return Math.floor(Math.random()*10); }
+
+function buildGrids(){
+  gridA.innerHTML=""; gridB.innerHTML=""; gridC.innerHTML="";
+  cellA=[]; cellB=[]; cellC=[]; A=[]; B=[];
+  var i,k,j;
+  gridA.style.gridTemplateColumns="repeat("+K+",var(--cs))";
+  gridB.style.gridTemplateColumns="repeat("+N+",var(--cs))";
+  gridC.style.gridTemplateColumns="repeat("+N+",var(--cs))";
+  for(i=0;i<M;i++){
+    A.push([]); cellA.push([]);
+    for(k=0;k<K;k++){
+      A[i].push(rand9());
+      var c=el("div","mcell ca",String(A[i][k]));
+      gridA.appendChild(c); cellA[i].push(c);
+    }
+  }
+  for(k=0;k<K;k++){
+    B.push([]); cellB.push([]);
+    for(j=0;j<N;j++){
+      B[k].push(rand9());
+      var c2=el("div","mcell cb",String(B[k][j]));
+      gridB.appendChild(c2); cellB[k].push(c2);
+    }
+  }
+  for(i=0;i<M;i++){
+    cellC.push([]);
+    for(j=0;j<N;j++){
+      var c3=el("div","mcell cc","·");
+      c3.title="C["+i+","+j+"] — compute this cell next";
+      (function(ci,cj){ c3.addEventListener("click", function(){ jumpTo(ci,cj); }); })(i,j);
+      gridC.appendChild(c3); cellC[i].push(c3);
+    }
+  }
+}
+
+var rHead=document.getElementById("rHead"),
+    rProd=document.getElementById("rProd"),
+    rSum=document.getElementById("rSum"),
+    progEl=document.getElementById("progEl"),
+    playBtn=document.getElementById("playBtn"),
+    stepBtn=document.getElementById("stepBtn"),
+    randBtn=document.getElementById("randBtn");
+
+var token=0, playing=false, pauseAfter=false, busy=false, userHalted=false, doneCount=0;
+
+function sleep(ms){ return new Promise(function(r){ setTimeout(r,ms); }); }
+function setPlaying(p){
+  playing=p;
+  playBtn.textContent = p ? "⏸ Pause" : "▶ Play";
+}
+function updateProg(){
+  progEl.innerHTML = "<b>"+doneCount+"</b> / "+(M*N)+" output cells done";
+}
+function clearTransient(){
+  gridA.querySelectorAll(".hl,.k").forEach(function(c){c.classList.remove("hl","k");});
+  gridB.querySelectorAll(".hl,.k").forEach(function(c){c.classList.remove("hl","k");});
+  gridC.querySelectorAll(".target").forEach(function(c){c.classList.remove("target");});
+}
+async function waitPause(tok){
+  while(tok===token && !playing) await sleep(120);
+  return tok===token;
+}
+async function computeCell(i,j,tok){
+  var k;
+  for(k=0;k<K;k++) cellA[i][k].classList.add("hl");
+  for(k=0;k<K;k++) cellB[k][j].classList.add("hl");
+  cellC[i][j].classList.add("target");
+  rHead.textContent="computing C["+i+", "+j+"] — row "+i+" of A · column "+j+" of B · K = "+K+" multiply-adds";
+  rProd.textContent="C["+i+","+j+"] = ";
+  rSum.textContent="";
+  var sum=0;
+  for(k=0;k<K;k++){
+    if(!await waitPause(tok)){ clearTransient(); return false; }
+    cellA[i][k].classList.add("k"); cellB[k][j].classList.add("k");
+    var p=A[i][k]*B[k][j]; sum+=p;
+    var sep = k===0 ? "" : " + ";
+    rProd.insertAdjacentHTML("beforeend",
+      sep+'<span class="pa">'+A[i][k]+'</span>×<span class="pb">'+B[k][j]+'</span>');
+    rSum.insertAdjacentHTML("beforeend",
+      (k===0?"":" + ")+'<span class="ps">'+p+'</span>');
+    await sleep(reduceMotion?0:460);
+    cellA[i][k].classList.remove("k"); cellB[k][j].classList.remove("k");
+    if(tok!==token){ clearTransient(); return false; }
+  }
+  rSum.insertAdjacentHTML("beforeend",' = <span class="tot">'+sum+'</span>');
+  cellC[i][j].textContent=String(sum);
+  cellC[i][j].classList.remove("target");
+  cellC[i][j].classList.add("done");
+  cellC[i][j].classList.add("pop");
+  setTimeout(function(){ cellC[i][j] && cellC[i][j].classList.remove("pop"); }, 500);
+  for(k=0;k<K;k++) cellA[i][k].classList.remove("hl");
+  for(k=0;k<K;k++) cellB[k][j].classList.remove("hl");
+  doneCount++; updateProg();
+  await sleep(reduceMotion?0:220);
+  return true;
+}
+function orderFrom(i0,j0){
+  var ord=[],i,j;
+  for(i=0;i<M;i++) for(j=0;j<N;j++) ord.push([i,j]);
+  if(i0!==undefined){
+    ord=ord.filter(function(c){ return !(c[0]===i0&&c[1]===j0) && cellC[c[0]][c[1]].textContent==="·"; });
+    ord.unshift([i0,j0]);
+  } else {
+    ord=ord.filter(function(c){ return cellC[c[0]][c[1]].textContent==="·"; });
+  }
+  return ord;
+}
+async function runSequence(tok, seq){
+  for(var s=0;s<seq.length;s++){
+    if(tok!==token) return;
+    if(!await waitPause(tok)) return;
+    var ok=await computeCell(seq[s][0],seq[s][1],tok);
+    if(!ok) return;
+    if(pauseAfter){ pauseAfter=false; setPlaying(false); return; }
+  }
+  if(tok===token){
+    setPlaying(false);
+    rHead.textContent="all 16 cells done — 2·4·6·4 = 192 FLOPs against ~128 bytes of traffic. Press ▶ to run again";
+  }
+}
+function startRun(seq){
+  if(busy){ setPlaying(true); pauseAfter=false; return; }
+  busy=true; token++;
+  var tok=token;
+  setPlaying(true); pauseAfter=false;
+  runSequence(tok,seq).then(function(){ if(tok===token) busy=false; else busy=false; });
+}
+function jumpTo(i,j){
+  if(busy || cellC[i][j].textContent!=="·") return;
+  startRun(orderFrom(i,j));
+}
+playBtn.addEventListener("click",function(){
+  if(busy){ if(playing){ setPlaying(false); userHalted=true; } else { setPlaying(true); pauseAfter=false; } return; }
+  if(doneCount===M*N){ resetC(); }
+  startRun(orderFrom());
+});
+stepBtn.addEventListener("click",function(){
+  if(busy){ setPlaying(true); pauseAfter=true; return; }
+  if(doneCount===M*N){ resetC(); }
+  busy=true; token++;
+  var tok=token;
+  setPlaying(true); pauseAfter=true;
+  runSequence(tok,orderFrom()).then(function(){ busy=false; });
+});
+function resetC(){
+  doneCount=0; updateProg();
+  for(var i=0;i<M;i++) for(var j=0;j<N;j++){
+    cellC[i][j].textContent="·";
+    cellC[i][j].className="mcell cc";
+  }
+}
+randBtn.addEventListener("click",function(){
+  token++; busy=false; setPlaying(false); userHalted=true;
+  buildGrids(); doneCount=0; updateProg();
+  rHead.textContent="fresh numbers — press ▶ Play";
+  rProd.textContent=""; rSum.textContent="";
+});
+buildGrids(); updateProg();
+
+if(reduceMotion){
+  doneCount=M*N;
+  for(var i2=0;i2<M;i2++) for(var j2=0;j2<N;j2++){
+    var s2=0; for(var k2=0;k2<K;k2++) s2+=A[i2][k2]*B[k2][j2];
+    cellC[i2][j2].textContent=String(s2); cellC[i2][j2].classList.add("done");
+  }
+  for(var k3=0;k3<K;k3++){ cellA[0][k3].classList.add("hl"); cellB[k3][0].classList.add("hl"); }
+  rHead.textContent="row 0 of A · column 0 of B → C[0,0] (all cells shown computed)";
+  var pr="C[0,0] = ", sm="";
+  for(var k4=0;k4<K;k4++){
+    pr += (k4?" + ":"")+"<span class=\"pa\">"+A[0][k4]+"</span>×<span class=\"pb\">"+B[k4][0]+"</span>";
+    sm += (k4?" + ":"")+"<span class=\"ps\">"+(A[0][k4]*B[k4][0])+"</span>";
+  }
+  var tot=0; for(var k5=0;k5<K;k5++) tot+=A[0][k5]*B[k5][0];
+  rProd.innerHTML=pr; rSum.innerHTML=sm+" = <span class=\"tot\">"+tot+"</span>";
+  updateProg();
+}else{
+  var ioA=new IntersectionObserver(function(es){
+    es.forEach(function(e){ if(e.isIntersecting && !busy && !userHalted){ startRun(orderFrom()); ioA.disconnect(); } });
+  },{threshold:.4});
+  ioA.observe(gridA);
+}
+
+/* =========================================================
+   2. COST calculator — 2n^3 vs 6n^2
+   ========================================================= */
+var nRange=document.getElementById("nRange"), nVal=document.getElementById("nVal"),
+    fVal=document.getElementById("fVal"), bVal=document.getElementById("bVal"),
+    aiVal=document.getElementById("aiVal"), verd2=document.getElementById("verd2"),
+    dbl2=document.getElementById("dbl2");
+var RIDGE_TEXT=597, RIDGE_DENSE=295;
+
+function fmtFlops(v){
+  if(v>=1e12) return (v/1e12).toFixed(2)+" TFLOP";
+  if(v>=1e9)  return (v/1e9).toFixed(1)+" GFLOP";
+  return (v/1e6).toFixed(1)+" MFLOP";
+}
+function fmtBytes(v){
+  if(v>=1e9) return (v/1e9).toFixed(2)+" GB";
+  return (v/1e6).toFixed(1)+" MB";
+}
+function nFromSlider(t){ return 256*Math.pow(64,t/100); }
+function sliderFromN(n){ return 100*Math.log(n/256)/Math.log(64); }
+
+/* chart geometry */
+var cc=document.getElementById("costChart");
+var CW=560,CH=258,cml=48,cmr=10,cmt=12,cmb=36;
+var cpw=CW-cml-cmr, cph=CH-cmt-cmb;
+var lx0=Math.log(256), lx1=Math.log(16384), ly0=Math.log(1), ly1=Math.log(262144);
+function CX(n){ return cml+(Math.log(n)-lx0)/(lx1-lx0)*cpw; }
+function CY(v){ return cmt+cph-(Math.log(v)-ly0)/(ly1-ly0)*cph; }
+function svgN(tag,attrs,parent){
+  var e=document.createElementNS("http://www.w3.org/2000/svg",tag);
+  for(var k in attrs) e.setAttribute(k,attrs[k]);
+  (parent||cc).appendChild(e); return e;
+}
+[256,512,1024,2048,4096,8192,16384].forEach(function(n){
+  svgN("line",{x1:CX(n),y1:cmt,x2:CX(n),y2:cmt+cph,class:"gridline"});
+  svgN("text",{x:CX(n),y:CH-20,"text-anchor":"middle",class:"tk"}).textContent=String(n);
+});
+[1,10,100,1000,10000,100000].forEach(function(v,i){
+  svgN("line",{x1:cml,y1:CY(v),x2:cml+cpw,y2:CY(v),class:"gridline"});
+  var lab=["1×","10×","100×","1k×","10k×","100k×"][i];
+  svgN("text",{x:cml-6,y:CY(v)+3,"text-anchor":"end",class:"tk"}).textContent=lab;
+});
+svgN("line",{x1:cml,y1:cmt+cph,x2:cml+cpw,y2:cmt+cph,class:"axis"});
+svgN("line",{x1:cml,y1:cmt,x2:cml,y2:cmt+cph,class:"axis"});
+svgN("text",{x:cml+cpw/2,y:CH-5,"text-anchor":"middle",class:"axl"}).textContent="matrix size n";
+function poly(fn,color){
+  var pts=[];
+  for(var i=0;i<=60;i++){
+    var n=256*Math.pow(64,i/60);
+    pts.push(CX(n).toFixed(1)+","+CY(fn(n)).toFixed(1));
+  }
+  return svgN("polyline",{points:pts.join(" "),fill:"none",stroke:color,"stroke-width":2.4});
+}
+poly(function(n){ return Math.pow(n/256,2); },"var(--accent)");
+poly(function(n){ return Math.pow(n/256,3); },"var(--oh)");
+/* legend in the empty top-left quadrant */
+svgN("line",{x1:cml+10,y1:cmt+11,x2:cml+26,y2:cmt+11,stroke:"var(--oh)","stroke-width":2.4});
+svgN("text",{x:cml+32,y:cmt+15,fill:"var(--oh)","font-weight":"700"}).textContent="compute · n³  (×8 per doubling)";
+svgN("line",{x1:cml+10,y1:cmt+29,x2:cml+26,y2:cmt+29,stroke:"var(--accent)","stroke-width":2.4});
+svgN("text",{x:cml+32,y:cmt+33,fill:"var(--accent)","font-weight":"700"}).textContent="memory · n²  (×4 per doubling)";
+var ccVline=svgN("line",{x1:0,y1:cmt,x2:0,y2:cmt+cph,stroke:"#e6edf3","stroke-opacity":".5","stroke-dasharray":"3 3"});
+var ccDotM=svgN("circle",{r:5,fill:"var(--accent)"});
+var ccDotC=svgN("circle",{r:5,fill:"var(--oh)"});
+
+function updateCost(){
+  var n=Math.round(nFromSlider(parseFloat(nRange.value)));
+  var flops=2*n*n*n, bytes=6*n*n, ai=n/3;
+  nVal.textContent="n = "+n.toLocaleString("en-US");
+  fVal.textContent=fmtFlops(flops);
+  bVal.textContent=fmtBytes(bytes);
+  aiVal.textContent=Math.round(ai).toLocaleString("en-US");
+  if(ai>=RIDGE_TEXT){
+    verd2.className="verdict good";
+    verd2.textContent="compute-bound — clears the H100 ridge (597 FLOP/byte); tensor cores, not HBM, are the limit";
+  }else{
+    verd2.className="verdict bad";
+    verd2.textContent="memory-bound — below the 597 ridge: at this size, HBM bytes (not math) are the bottleneck";
+  }
+  if(n>=512){
+    dbl2.textContent="vs n = "+(n/2)+": FLOPs ×8 · memory ×4 · intensity ×2";
+  }else{
+    dbl2.textContent="drag to 8192³ and watch the gap widen";
+  }
+  var px=CX(n);
+  ccVline.setAttribute("x1",px); ccVline.setAttribute("x2",px);
+  ccDotM.setAttribute("cx",px); ccDotM.setAttribute("cy",CY(Math.pow(n/256,2)));
+  ccDotC.setAttribute("cx",px); ccDotC.setAttribute("cy",CY(Math.pow(n/256,3)));
+  document.querySelectorAll("#nPresets .preset").forEach(function(b){
+    b.classList.toggle("on", Math.abs(n-parseFloat(b.dataset.n))<1);
+  });
+}
+nRange.addEventListener("input",updateCost);
+document.querySelectorAll("#nPresets .preset").forEach(function(b){
+  b.addEventListener("click",function(){ nRange.value=sliderFromN(parseFloat(b.dataset.n)); updateCost(); });
+});
+nRange.value=sliderFromN(4096); updateCost();
+
+/* =========================================================
+   3. ROOFLINE
+   ========================================================= */
+var PEAK=2000, BWt=3.35, RIDGE=PEAK/BWt;
+var aiRange=document.getElementById("aiRange"), aiVal3=document.getElementById("aiVal3"),
+    attVal3=document.getElementById("attVal3"), pctVal3=document.getElementById("pctVal3"),
+    limVal3=document.getElementById("limVal3"), verd3=document.getElementById("verd3");
+var rc=document.getElementById("roofChart");
+var RW=560,RH=330,rml=52,rmr=14,rmt=14,rmb=42;
+var rpw=RW-rml-rmr, rph=RH-rmt-rmb;
+var rx0=Math.log(0.25), rx1=Math.log(4096), ry0=Math.log(1), ry1=Math.log(3000);
+function RX(x){ return rml+(Math.log(x)-rx0)/(rx1-rx0)*rpw; }
+function RY(y){ return rmt+rph-(Math.log(y)-ry0)/(ry1-ry0)*rph; }
+function svgR(tag,attrs,parent){
+  var e=document.createElementNS("http://www.w3.org/2000/svg",tag);
+  for(var k in attrs) e.setAttribute(k,attrs[k]);
+  (parent||rc).appendChild(e); return e;
+}
+[1,10,100,1000].forEach(function(v){
+  svgR("line",{x1:RX(v),y1:rmt,x2:RX(v),y2:rmt+rph,class:"gridline"});
+  svgR("text",{x:RX(v),y:RH-24,"text-anchor":"middle",class:"tk"}).textContent=String(v);
+});
+[1,10,100,1000].forEach(function(v){
+  svgR("line",{x1:rml,y1:RY(v),x2:rml+rpw,y2:RY(v),class:"gridline"});
+  svgR("text",{x:rml-6,y:RY(v)+3,"text-anchor":"end",class:"tk"}).textContent=String(v);
+});
+/* attainable region fill: along memory roof then compute roof */
+(function(){
+  var pts="M"+RX(0.2985).toFixed(1)+","+RY(1).toFixed(1);
+  for(var i=0;i<=40;i++){
+    var x=0.2985*Math.pow(RIDGE/0.2985,i/40);
+    pts+=" L"+RX(x).toFixed(1)+","+RY(BWt*x).toFixed(1);
+  }
+  pts+=" L"+RX(4096).toFixed(1)+","+RY(PEAK).toFixed(1);
+  pts+=" L"+RX(4096).toFixed(1)+","+RY(1).toFixed(1)+" Z";
+  svgR("path",{d:pts,fill:"rgba(88,166,255,.055)"});
+})();
+svgR("line",{x1:RX(0.2985),y1:RY(1),x2:RX(RIDGE),y2:RY(PEAK),stroke:"var(--red)","stroke-width":2.6});
+svgR("line",{x1:RX(RIDGE),y1:RY(PEAK),x2:RX(4096),y2:RY(PEAK),stroke:"var(--accent)","stroke-width":2.6});
+svgR("line",{x1:RX(RIDGE),y1:rmt,x2:RX(RIDGE),y2:rmt+rph,stroke:"var(--red)","stroke-width":1.3,class:"dash"});
+svgR("line",{x1:rml,y1:rmt,x2:rml,y2:rmt+rph,class:"axis"});
+svgR("line",{x1:rml,y1:rmt+rph,x2:rml+rpw,y2:rmt+rph,class:"axis"});
+/* rotated memory-roof label along the slope */
+(function(){
+  var x1=RX(0.7),y1=RY(BWt*0.7),x2=RX(20),y2=RY(BWt*20);
+  var ang=Math.atan2(y2-y1,x2-x1)*180/Math.PI;
+  var mx=(x1+x2)/2,my=(y1+y2)/2;
+  var t=svgR("text",{x:mx,y:my-9,"text-anchor":"middle",fill:"var(--red)","font-weight":"700",
+    transform:"rotate("+ang.toFixed(1)+" "+mx.toFixed(1)+" "+(my-9).toFixed(1)+")"});
+  t.textContent="memory roof · 3.35 TB/s × AI";
+})();
+svgR("text",{x:RX(RIDGE)-14,y:rmt+1,"text-anchor":"end",fill:"var(--accent)","font-weight":"700"})
+  .textContent="compute roof · 2000 TFLOPS";
+svgR("text",{x:RX(RIDGE)+8,y:rmt+1,fill:"var(--red)","font-weight":"700"})
+  .textContent="ridge 597";
+svgR("text",{x:rml+rpw/2,y:RH-6,"text-anchor":"middle",class:"axl"}).textContent="arithmetic intensity (FLOP / byte)";
+svgR("text",{x:14,y:rmt+rph/2,"text-anchor":"middle",class:"axl",
+  transform:"rotate(-90 14 "+(rmt+rph/2)+")"}).textContent="attainable (TFLOPS)";
+var rGuideH=svgR("line",{x1:rml,y1:0,x2:0,y2:0,stroke:"#e6edf3","stroke-opacity":".35","stroke-dasharray":"3 3"});
+var rGuideV=svgR("line",{x1:0,y1:rmt+rph,x2:0,y2:0,stroke:"#e6edf3","stroke-opacity":".35","stroke-dasharray":"3 3"});
+var rDot=svgR("circle",{r:6.5,fill:"var(--work)",stroke:"#0a0e14","stroke-width":2});
+
+function aiFromSlider(t){ return 0.25*Math.pow(16384,t/100); }
+function sliderFromAI(a){ return 100*Math.log(a/0.25)/Math.log(16384); }
+function fmtTF(v){
+  if(v<10) return v.toFixed(2)+" TFLOPS";
+  if(v<100) return v.toFixed(1)+" TFLOPS";
+  return Math.round(v).toLocaleString("en-US")+" TFLOPS";
+}
+function updateRoof(){
+  var ai=aiFromSlider(parseFloat(aiRange.value));
+  var attain=Math.min(PEAK, BWt*ai);
+  var pretty = ai>=10 ? Math.round(ai).toLocaleString("en-US") : (ai<1?ai.toFixed(2):Math.round(ai));
+  aiVal3.textContent=pretty+" FLOP/byte";
+  attVal3.textContent=fmtTF(attain);
+  pctVal3.textContent=(attain/PEAK*100)<1 ? (attain/PEAK*100).toFixed(2)+"%" : Math.round(attain/PEAK*100)+"%";
+  var px=RX(ai), py=RY(attain);
+  rDot.setAttribute("cx",px); rDot.setAttribute("cy",py);
+  rGuideH.setAttribute("x2",px); rGuideH.setAttribute("y1",py); rGuideH.setAttribute("y2",py);
+  rGuideV.setAttribute("x1",px); rGuideV.setAttribute("x2",px); rGuideV.setAttribute("y2",py);
+  if(ai<RIDGE){
+    rDot.setAttribute("fill","var(--red)");
+    limVal3.textContent="HBM bandwidth"; limVal3.style.color="#ff8a84";
+    verd3.className="verdict bad";
+    verd3.textContent="memory-bound — you pay bytes. HBM streams at 3.35 TB/s while tensor cores wait.";
+  }else{
+    rDot.setAttribute("fill","var(--work)");
+    limVal3.textContent="tensor cores"; limVal3.style.color="#7ee2a0";
+    verd3.className="verdict good";
+    verd3.textContent="compute-bound — you pay FLOPs. This is GEMM territory: math is the bottleneck.";
+  }
+  document.querySelectorAll("#aiPresets .preset").forEach(function(b){
+    b.classList.toggle("on", Math.abs(Math.log(ai/parseFloat(b.dataset.ai)))<0.01);
+  });
+}
+aiRange.addEventListener("input",updateRoof);
+document.querySelectorAll("#aiPresets .preset").forEach(function(b){
+  b.addEventListener("click",function(){ aiRange.value=sliderFromAI(parseFloat(b.dataset.ai)); updateRoof(); });
+});
+aiRange.value=sliderFromAI(1365); updateRoof();
+
+/* =========================================================
+   4. BENCH — animate bars on reveal
+   ========================================================= */
+var benchWrap=document.getElementById("benchRows");
+var ioB=new IntersectionObserver(function(es){
+  es.forEach(function(e){ if(e.isIntersecting){
+    benchWrap.querySelectorAll(".brow").forEach(function(r){ r.classList.add("in"); });
+    ioB.disconnect();
+  }});
+},{threshold:.3});
+ioB.observe(benchWrap);
+
+/* =========================================================
+   5. TRANSFORMER — M explorer
+   ========================================================= */
+var mRange=document.getElementById("mRange"), mVal=document.getElementById("mVal"),
+    aiQ=document.getElementById("aiQ"), aiF=document.getElementById("aiF"), aiL=document.getElementById("aiL"),
+    atQ=document.getElementById("atQ"), atF=document.getElementById("atF"), atL=document.getElementById("atL"),
+    vQ=document.getElementById("vQ"), vF=document.getElementById("vF"), vL=document.getElementById("vL"),
+    mNote=document.getElementById("mNote");
+function aiOf(m,k,n){ return m*n*k/(m*k+k*n+m*n); }
+function mFromSlider(t){ return Math.pow(16384,t/100); }
+function sliderFromM(m){ return 100*Math.log(m)/Math.log(16384); }
+function chipFor(ai){
+  return ai>=RIDGE_TEXT
+    ? '<span class="vchip cb2">compute-bound</span>'
+    : '<span class="vchip mb">memory-bound</span>';
+}
+function updateM(){
+  var m=Math.max(1,Math.round(mFromSlider(parseFloat(mRange.value))));
+  mVal.textContent="M = "+m.toLocaleString("en-US");
+  var defs=[["QKV proj",4096,4096,aiQ,atQ,vQ],["FFN gate/up",4096,11008,aiF,atF,vF],["LM head",4096,32000,aiL,atL,vL]];
+  defs.forEach(function(d){
+    var ai=aiOf(m,d[1],d[2]), attain=Math.min(PEAK,BWt*ai);
+    d[3].textContent = ai>=10 ? Math.round(ai).toLocaleString("en-US") : ai.toFixed(1);
+    d[4].textContent = fmtTF(attain);
+    d[5].innerHTML = chipFor(ai);
+  });
+  if(m===1){
+    mNote.textContent="M = 1 (decode): intensity ≈ 1 → every projection is a GEMV, capped at ~3.4 TFLOPS by HBM.";
+  }else if(m<600){
+    mNote.textContent="M = "+m.toLocaleString("en-US")+": intensity ≈ "+m+" — still below the ridge. Batching buys ~1 FLOP/byte per token.";
+  }else if(m<1791){
+    mNote.textContent="M = "+m.toLocaleString("en-US")+": the biggest GEMMs are turning compute-bound; the rest are close behind.";
+  }else{
+    mNote.textContent="M = "+m.toLocaleString("en-US")+": every projection is a big GEMM — compute-bound. This is prefill.";
+  }
+  document.querySelectorAll("#mPresets .preset").forEach(function(b){
+    b.classList.toggle("on", Math.abs(m-parseFloat(b.dataset.m))<1);
+  });
+}
+mRange.addEventListener("input",updateM);
+document.querySelectorAll("#mPresets .preset").forEach(function(b){
+  b.addEventListener("click",function(){ mRange.value=sliderFromM(parseFloat(b.dataset.m)); updateM(); });
+});
+mRange.value=sliderFromM(4096); updateM();
+})();
+</script>
+</body>
+</html>
