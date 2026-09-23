@@ -1,0 +1,1096 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tensor Cores — Visual Explainer</title>
+<style>
+  :root{
+    --bg:#0a0e14; --panel:#101722; --panel2:#0c1220; --border:#1e2a3c;
+    --text:#dbe4ee; --muted:#7d8ca0; --faint:#4b5a6e;
+    --oh:#ff9040; --oh-dim:rgba(255,144,64,.16);
+    --work:#3fb950; --work-dim:rgba(63,185,80,.15);
+    --accent:#58a6ff; --nvidia:#76b900;
+    --mono:"Cascadia Code","JetBrains Mono",Consolas,ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:16px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+       -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 22px}
+  code,.mono{font-family:var(--mono)}
+  a{color:var(--accent)}
+
+  /* ---------- header ---------- */
+  header{padding:64px 0 40px;position:relative;overflow:hidden}
+  header::before{content:"";position:absolute;inset:0;
+    background:
+      radial-gradient(600px 300px at 15% 0%,rgba(118,185,0,.10),transparent 60%),
+      radial-gradient(700px 340px at 85% 10%,rgba(88,166,255,.09),transparent 60%);}
+  header .wrap{position:relative}
+  .kicker{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.16em;text-transform:uppercase}
+  h1{font-size:clamp(28px,5vw,44px);line-height:1.15;margin:10px 0 12px;letter-spacing:-.01em}
+  h1 .hl{color:var(--nvidia)}
+  .sub{color:var(--muted);max-width:780px;font-size:17px}
+  .chips{display:flex;gap:12px;flex-wrap:wrap;margin-top:26px}
+  .chip{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:12px 18px;min-width:150px}
+  .chip b{display:block;font-family:var(--mono);font-size:22px;font-weight:600}
+  .chip span{color:var(--muted);font-size:12.5px}
+  .chip.c1 b{color:var(--nvidia)} .chip.c2 b{color:var(--work)} .chip.c3 b{color:var(--accent)}
+
+  nav.top{position:sticky;top:0;z-index:50;background:rgba(10,14,20,.88);backdrop-filter:blur(8px);
+          border-bottom:1px solid var(--border)}
+  nav.top .wrap{display:flex;gap:22px;padding:10px 22px;overflow-x:auto}
+  nav.top a{color:var(--muted);text-decoration:none;font-size:13.5px;white-space:nowrap;padding:4px 0}
+  nav.top a:hover{color:var(--text)}
+
+  section{padding:62px 0;border-top:1px solid var(--border)}
+  h2{font-size:26px;margin:6px 0 8px;letter-spacing:-.01em}
+  h2 .n{color:var(--faint);font-family:var(--mono);font-size:18px;margin-right:10px}
+  .lead{color:var(--muted);max-width:780px;margin:0 0 28px}
+  .lead code{color:var(--text);background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:1px 6px;font-size:.85em}
+
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:22px}
+  .note{font-size:12.5px;color:var(--faint);margin-top:12px}
+
+  /* ---------- 1. anatomy ---------- */
+  .eq{display:flex;align-items:center;justify-content:center;gap:16px;flex-wrap:wrap;margin-bottom:22px}
+  .eqcol{text-align:center}
+  .eqg{display:grid;grid-template-columns:repeat(4,1fr);gap:3px;width:124px;margin:0 auto}
+  .eqg .q{aspect-ratio:1;background:var(--panel2);border:1px solid var(--border);border-radius:4px;
+          display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:9.5px;color:var(--muted)}
+  .eqg.d .q{background:var(--work-dim);border-color:rgba(63,185,80,.45)}
+  .eqlab{font-family:var(--mono);font-size:10.5px;color:var(--faint);margin-top:6px}
+  .eqop{font-family:var(--mono);font-size:28px;color:var(--faint);padding-bottom:18px}
+
+  .duel{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .duel-p{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:16px 16px 14px;
+          transition:border-color .35s,box-shadow .35s,transform .35s;opacity:.55;min-width:0;cursor:pointer}
+  .duel-p.active{opacity:1;transform:translateY(-3px)}
+  .duel-p.c.active{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent),0 10px 30px -10px rgba(88,166,255,.45)}
+  .duel-p.t.active{border-color:var(--nvidia);box-shadow:0 0 0 1px var(--nvidia),0 10px 34px -12px rgba(118,185,0,.45)}
+  .duel-t{font-weight:700;font-size:13.5px;margin-bottom:2px}
+  .duel-s{color:var(--muted);font-size:11.5px;margin-bottom:12px}
+  .cycbar{display:grid;grid-template-columns:repeat(16,1fr);gap:3px}
+  .cycbar .cc{height:11px;border-radius:2px;background:#182234;transition:background .12s}
+  .duel-p.c.active .cycbar .cc.on{background:var(--accent);box-shadow:0 0 6px rgba(88,166,255,.5)}
+  .dgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;max-width:180px;margin:0 auto}
+  .dgrid .dq{aspect-ratio:1;display:flex;align-items:center;justify-content:center;background:#182234;
+             border:1px solid #243550;border-radius:6px;font-family:var(--mono);font-size:13px;color:var(--faint);transition:.3s}
+  .duel-p.t.active .dgrid .dq.hit{background:var(--nvidia);border-color:var(--nvidia);color:#0a0e14;font-weight:700;
+             box-shadow:0 0 10px rgba(118,185,0,.55)}
+  .cycnum{margin-top:12px;text-align:center;font-family:var(--mono);font-size:15px;color:var(--muted)}
+  .cycnum b{font-size:19px;color:var(--text)}
+  .duel-p.c.active .cycnum b{color:var(--accent)}
+  .duel-p.t.active .cycnum b{color:var(--nvidia)}
+  .ana-stats{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+  .astat{border:1px solid var(--border);border-radius:12px;padding:12px 16px;background:var(--panel2);
+         border-left:3px solid var(--faint)}
+  .astat.c{border-left-color:var(--accent)} .astat.t{border-left-color:var(--nvidia)}
+  .astat b{font-family:var(--mono);font-size:19px;display:block}
+  .astat.c b{color:var(--accent)} .astat.t b{color:var(--nvidia)}
+  .astat span{color:var(--muted);font-size:12px}
+
+  pre.code{background:#080d15;border:1px solid var(--border);border-radius:12px;padding:16px 18px;
+           overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.6;margin:18px 0 0}
+  pre.code .k{color:#c586c0} pre.code .f{color:#dcdcaa} pre.code .s{color:#ce9178}
+  pre.code .c{color:#5a7a4a;font-style:italic} pre.code .n{color:#b5cea8} pre.code .t{color:#4ec9b0}
+  .code-hint{color:var(--faint);font-size:12px;margin:8px 2px 0}
+
+  /* ---------- 2. mma explorer ---------- */
+  .mma-row{display:flex;align-items:center;justify-content:center;gap:16px;flex-wrap:wrap;margin:4px 0 16px}
+  .mgcol{text-align:center}
+  .mg{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;width:216px}
+  .mg .g{aspect-ratio:1;display:flex;align-items:center;justify-content:center;font-family:var(--mono);
+         font-size:15px;background:var(--panel2);border:1px solid var(--border);border-radius:7px;color:var(--muted);
+         transition:background .25s,color .25s,border-color .25s,box-shadow .25s}
+  .mg .g.k{background:var(--oh-dim);border-color:var(--oh);color:var(--oh)}
+  .mg .g.res{background:var(--work-dim);border-color:rgba(63,185,80,.45);color:var(--work)}
+  .mg .g.res.fin{box-shadow:0 0 9px rgba(63,185,80,.4)}
+  .mg .g.hot{background:var(--work);border-color:var(--work);color:#08111e;font-weight:700}
+  .mg.d .g{cursor:pointer}
+  .mg .g.focus{outline:2px solid #e6edf3;outline-offset:1px}
+  .mgop{font-family:var(--mono);font-size:26px;color:var(--faint);padding-bottom:20px}
+  .mctl{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:4px}
+  .btn{background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:9px;
+       padding:8px 16px;font-size:13.5px;cursor:pointer;transition:.2s;font-family:inherit}
+  .btn:hover{border-color:var(--accent)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#08111e;font-weight:700}
+  .kbadge{margin-left:auto;font-family:var(--mono);font-size:12.5px;color:var(--muted);
+          border:1px solid var(--border);border-radius:999px;padding:5px 14px}
+  .kbadge b{color:var(--oh)}
+  .mchips{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+  .mchip{font-family:var(--mono);font-size:12.5px;color:var(--muted);background:var(--panel2);
+         border:1px solid var(--border);border-radius:8px;padding:7px 12px}
+  .mchip b{color:var(--work)}
+  .mread2{margin-top:14px;font-size:13.5px;color:var(--muted);background:var(--panel2);
+          border:1px solid var(--border);border-radius:10px;padding:12px 16px}
+  .mread2 .fx{color:var(--text);font-family:var(--mono)}
+  .term{font-family:var(--mono)}
+  .term.done{color:var(--work)} .term.wait{color:var(--faint)}
+
+  /* ---------- 3. ladder ---------- */
+  .cmp3{display:grid;grid-template-columns:200px 1fr 130px;gap:14px;align-items:center;margin-top:14px}
+  .cmp3 .lbl{color:var(--muted);font-size:12.5px;text-align:right}
+  .cmp3 .lbl b{display:block;font-family:var(--mono);color:var(--text);font-size:14px}
+  .cmp3 .ratio{font-family:var(--mono);font-size:16px;font-weight:700;text-align:center}
+  .tbar{height:38px;border-radius:10px;overflow:hidden;display:flex;border:1px solid var(--border);
+        background:var(--panel2);position:relative}
+  .tbar .fill{height:100%;width:0;transition:width 1.2s cubic-bezier(.2,.7,.3,1);
+              display:flex;align-items:center;justify-content:flex-end;padding-right:10px;
+              font-family:var(--mono);font-weight:700;font-size:12.5px;color:#0a0e14;white-space:nowrap}
+  .tbar .fill.dim{background:#415271}
+  .tbar .fill.good{background:var(--work)}
+  .tbar .fill.nv{background:var(--nvidia)}
+  .ticks{display:flex;justify-content:space-between;color:var(--faint);font-family:var(--mono);font-size:11px;margin-top:5px}
+  .prec-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px}
+  .verdict{margin-top:14px;padding:12px 16px;border-radius:10px;background:var(--panel2);
+           border-left:3px solid var(--faint);font-size:14px}
+  .verdict.v1{border-color:var(--work);color:#7ee2a0}
+  .verdict.v2{border-color:#d29922;color:#e3b341}
+  .verdict.v3{border-color:var(--nvidia);color:#a4d94e}
+  .hw-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+  .genrow{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:18px}
+  .gencard{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:16px;
+           display:flex;flex-direction:column;gap:8px;min-width:0}
+  .gencard .gk{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint)}
+  .gencard h3{margin:0;font-size:15px}
+  .gencard p{margin:0;color:var(--muted);font-size:12.5px;line-height:1.55;flex:1}
+  .gencard .gm{font-family:var(--mono);font-size:10.5px;color:var(--nvidia);background:rgba(118,185,0,.10);
+               border:1px solid rgba(118,185,0,.35);border-radius:6px;padding:5px 8px;align-self:flex-start}
+
+  /* ---------- 4. wmma ---------- */
+  .wm{display:grid;grid-template-columns:1.25fr 1fr;gap:22px;align-items:start}
+  .wm pre.code{margin:0;font-size:12.5px}
+  .wm pre.code .ln{display:block;padding:2px 8px;margin:0 -8px;border-left:3px solid transparent;
+                   border-radius:5px;transition:background .25s,border-color .25s}
+  .wm pre.code .ln.on{background:rgba(118,185,0,.09);border-left-color:var(--nvidia)}
+  .fragt{margin-bottom:16px}
+  .flab{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;color:var(--muted);margin-bottom:5px}
+  .flab .st{color:var(--faint)}
+  .frag{display:grid;grid-template-columns:repeat(16,1fr);gap:2px}
+  .frag i{display:block;aspect-ratio:1;background:#141d2c;border-radius:2px;transition:background .3s,box-shadow .3s}
+  .frag.loaded i{background:rgba(88,166,255,.38)}
+  .frag.acc0 i{background:rgba(99,110,130,.30)}
+  .frag.acc1 i{background:var(--work);box-shadow:0 0 5px rgba(63,185,80,.4)}
+  .frag.stored i{background:rgba(63,185,80,.42);box-shadow:none}
+  .wm-ctl{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .wsteplbl{font-family:var(--mono);font-size:12.5px;color:var(--muted);margin-left:auto}
+  .wcap{margin-top:12px;font-size:13.5px;color:var(--muted);min-height:96px}
+  .wcap b{color:var(--text)}
+
+  /* ---------- 5. odd size ---------- */
+  .presets{display:flex;gap:8px;flex-wrap:wrap}
+  .preset{background:var(--panel2);border:1px solid var(--border);color:var(--muted);border-radius:999px;
+          padding:5px 14px;font-size:12.5px;cursor:pointer;font-family:var(--mono);transition:.2s}
+  .preset:hover{color:var(--text);border-color:var(--accent)}
+  .preset.on{color:#08111e;background:var(--accent);border-color:var(--accent);font-weight:700}
+  .ctl label{display:block;font-size:13px;color:var(--muted);margin:14px 0 4px}
+  .ctl .val{float:right;font-family:var(--mono);color:var(--text)}
+  input[type=range]{width:100%;accent-color:var(--oh);height:26px}
+  .osz{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:18px}
+  .oszbox{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:16px;min-width:0}
+  .oszbox h3{margin:0 0 2px;font-size:14px}
+  .oszbox .osub{color:var(--muted);font-size:12px;margin-bottom:12px}
+  .tiles{display:flex;gap:2px}
+  .tiles .t{flex:1;min-width:2px;height:30px;background:var(--work-dim);border:1px solid rgba(63,185,80,.4);
+            border-radius:3px;position:relative;overflow:hidden}
+  .tiles .t.part::after{content:"";position:absolute;top:0;bottom:0;right:0;width:var(--pw);
+                        background:rgba(255,144,64,.4)}
+  .tiles-cap{font-family:var(--mono);font-size:11px;color:var(--faint);margin-top:8px;line-height:1.7}
+  .tiles-cap b{color:var(--oh)}
+  .alignh{display:grid;grid-template-columns:repeat(16,1fr);gap:3px;margin-bottom:5px}
+  .alignh span{font-family:var(--mono);font-size:8.5px;color:var(--faint);text-align:center}
+  .alrow{display:grid;grid-template-columns:repeat(16,1fr);gap:3px;margin-bottom:3px}
+  .alrow i{height:11px;border-radius:2px;background:transparent}
+  .alrow i.hit0{background:var(--work);box-shadow:0 0 5px rgba(63,185,80,.5)}
+  .alrow i.hitx{background:var(--oh)}
+  .estats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:18px}
+  .estat{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:12px 14px;
+         border-top:3px solid var(--faint);min-width:0}
+  .estat b{font-family:var(--mono);font-size:21px;font-weight:600;display:block;line-height:1.2}
+  .estat span{color:var(--muted);font-size:11.5px;line-height:1.4;display:block;margin-top:3px}
+  .estat.good b{color:var(--work)} .estat.bad b{color:var(--oh)}
+  .measbar{margin-top:18px}
+  .measbar h3{font-size:15px;margin:0 0 4px}
+  .cmp{display:grid;grid-template-columns:150px 1fr;gap:14px;align-items:center;margin-top:12px}
+  .cmp .lbl{color:var(--muted);font-size:12.5px;text-align:right}
+  .cmp .lbl b{display:block;font-family:var(--mono);color:var(--text);font-size:14px}
+  .tbar .fill.est{background:repeating-linear-gradient(45deg,#5b6f92,#5b6f92 7px,#46587a 7px,#46587a 14px)}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;font-size:12.5px;color:var(--muted)}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+  .caveat{margin-top:20px;padding:14px 18px;border-radius:12px;background:rgba(210,153,34,.07);
+          border:1px solid rgba(210,153,34,.35);font-size:14px}
+  .caveat b{color:#e3b341}
+
+  /* ---------- 6. rules ---------- */
+  .strats{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+  .strat{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:18px;
+         display:flex;flex-direction:column;gap:10px;position:relative}
+  .strat h3{margin:0;font-size:15.5px}
+  .strat p{margin:0;color:var(--muted);font-size:13px;line-height:1.55;flex:1}
+  .strat .mini{display:flex;align-items:center;gap:5px;flex-wrap:wrap;font-family:var(--mono);font-size:10.5px}
+  .strat .m{background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:2px 6px;color:var(--muted)}
+  .strat .m.hi{border-color:var(--nvidia);color:var(--nvidia);background:rgba(118,185,0,.12)}
+  .strat .m.bad{border-color:rgba(255,144,64,.5);color:var(--oh)}
+  .strat .arr{color:var(--faint)}
+  .strat.star{border-color:var(--nvidia);box-shadow:0 0 0 1px var(--nvidia),0 10px 34px -12px rgba(118,185,0,.35)}
+  .strat .badge{position:absolute;top:-11px;right:12px;background:var(--nvidia);color:#0a0e14;
+                font-size:10px;font-weight:800;letter-spacing:.06em;border-radius:999px;padding:3px 10px;text-transform:uppercase}
+
+  footer{padding:44px 0 60px;border-top:1px solid var(--border)}
+  .formula{font-family:var(--mono);font-size:15px;color:var(--muted);text-align:center;padding:8px 0 4px}
+  .formula b{color:var(--work)}
+  .fin{color:var(--faint);text-align:center;font-size:13px;margin-top:10px}
+
+  .reveal{opacity:0;transform:translateY(16px);transition:opacity .6s ease,transform .6s ease}
+  .reveal.in{opacity:1;transform:none}
+
+  @media(max-width:940px){
+    .duel{grid-template-columns:1fr}
+    .estats{grid-template-columns:1fr 1fr}
+    .osz{grid-template-columns:1fr}
+    .wm{grid-template-columns:1fr}
+    .genrow{grid-template-columns:1fr}
+    .cmp3{grid-template-columns:130px 1fr 90px}
+    .cmp{grid-template-columns:110px 1fr}
+  }
+  @media(max-width:560px){
+    .strats{grid-template-columns:1fr}
+    .estats{grid-template-columns:1fr 1fr}
+    .ana-stats{grid-template-columns:1fr}
+    .mg{width:180px}
+    .cmp3{grid-template-columns:100px 1fr;grid-template-rows:auto auto}
+    .cmp3 .ratio{grid-column:2;text-align:left}
+    .cmp{grid-template-columns:86px 1fr}
+  }
+  @media(prefers-reduced-motion:reduce){
+    *{transition:none!important;animation:none!important;scroll-behavior:auto}
+  }
+</style>
+</head>
+<body>
+
+<nav class="top"><div class="wrap">
+  <a href="#anatomy">① One core, one cycle</a>
+  <a href="#mma">② Inside the MMA</a>
+  <a href="#ladder">③ The throughput ladder</a>
+  <a href="#wmma">④ Driving them: WMMA</a>
+  <a href="#oddsizes">⑤ The odd-size tax</a>
+  <a href="#rules">⑥ Rules of thumb</a>
+</div></nav>
+
+<header><div class="wrap">
+  <div class="kicker">GPU Inference · Kernel Optimization</div>
+  <h1><span class="hl">Tensor Cores</span>:<br>whole matrix tiles retire in a single cycle</h1>
+  <p class="sub">A tensor core is a hardwired matrix multiply-accumulate unit: <em>D = A×B + C</em> on
+     4×4 tiles, all 64 multiply-adds in one clock cycle. An H100 packs 528 of them, which is how the
+     same die that does ~67 TFLOPS on CUDA cores reaches ~2000 TFLOPS on fp16 matrix math — and
+     Blackwell's 5th-gen tensor cores push the same math another 10× at FP4. The catch:
+     strict dtypes, aligned memory, and multiple-of-16 tiles — miss them and you pay double-digit
+     percentages.</p>
+  <div class="chips">
+    <div class="chip c1"><b>128 FLOPs</b><span>per tensor core, per cycle — one 4×4×4 MMA</span></div>
+    <div class="chip c2"><b>528</b><span>tensor cores on H100 · 132 SMs × 4</span></div>
+    <div class="chip c3"><b>30×</b><span>matrix throughput vs the same die's CUDA cores</span></div>
+  </div>
+</div></header>
+
+<!-- ============ 1. ANATOMY ============ -->
+<section id="anatomy"><div class="wrap reveal">
+  <div class="kicker">Section 1</div>
+  <h2><span class="n">01</span>One core, one cycle: the multiply-accumulate</h2>
+  <p class="lead">Everything a tensor core does is one operation, done at absurd width: take two small
+     matrices and an accumulator, multiply and add them all at once. The 4×4×4 MMA is the atom —
+     4·4·4 = 64 multiply-adds = <b>128 FLOPs per cycle, per core</b>. Compare that with a CUDA core,
+     which retires one scalar FMA per cycle and needs 64 cycles for the same tile.</p>
+
+  <div class="panel">
+    <div class="eq">
+      <div class="eqcol"><div class="eqg" id="eqA"></div><div class="eqlab">A · 4×4</div></div>
+      <div class="eqop">×</div>
+      <div class="eqcol"><div class="eqg" id="eqB"></div><div class="eqlab">B · 4×4</div></div>
+      <div class="eqop">+</div>
+      <div class="eqcol"><div class="eqg" id="eqC"></div><div class="eqlab">C · accumulator</div></div>
+      <div class="eqop">=</div>
+      <div class="eqcol"><div class="eqg d" id="eqD"></div><div class="eqlab">D · 4×4</div></div>
+    </div>
+
+    <div class="duel">
+      <div class="duel-p c" id="panCuda" title="click to focus">
+        <div class="duel-t" style="color:var(--accent)">CUDA core lane · FP32</div>
+        <div class="duel-s">one scalar FMA per cycle — the 4×4×4 tile takes 64 sequential cycles</div>
+        <div class="cycbar" id="cycbar"></div>
+        <div class="cycnum">cycle <b id="cycCuda">0 / 64</b></div>
+      </div>
+      <div class="duel-p t" id="panTc" title="click to focus">
+        <div class="duel-t" style="color:var(--nvidia)">Tensor core</div>
+        <div class="duel-s">all 64 multiply-adds wired in parallel — the same tile, done</div>
+        <div class="dgrid" id="dgrid"></div>
+        <div class="cycnum">cycle <b id="cycTc">waiting…</b></div>
+      </div>
+    </div>
+    <div class="ana-stats">
+      <div class="astat c"><b>64 cycles</b><span>for one 4×4×4 MMA on a single CUDA core lane · the chip's 16,896 FP32 cores total ≈ 67 TFLOPS</span></div>
+      <div class="astat t"><b>1 cycle · 128 FLOPs</b><span>per tensor core · 528 cores × 128 × 1.8 GHz of raw MMA throughput</span></div>
+    </div>
+    <p class="note">The panels alternate — or click one to hold it. Each square on the left is one of
+       the 64 multiply-adds a CUDA lane must do alone; the grid on the right is D, computed in one shot.</p>
+  </div>
+
+  <pre class="code"><span class="c">// the atom every tensor-core instruction is built from</span>
+<span class="k">for</span> m <span class="k">in</span> 0..3:  <span class="k">for</span> n <span class="k">in</span> 0..3:          <span class="c">// 16 outputs</span>
+    D[m][n] = C[m][n]
+    <span class="k">for</span> k <span class="k">in</span> 0..3:                      <span class="c">// × 4 terms each</span>
+        D[m][n] += A[m][k] * B[k][n]    <span class="c">// 64 FMAs = 128 FLOPs, one cycle</span></pre>
+  <p class="code-hint">A 16×16×16 WMMA tile is the same loop with 16s — 4096 FMAs = 8192 FLOPs per instruction.</p>
+</div></section>
+
+<!-- ============ 2. MMA EXPLORER ============ -->
+<section id="mma"><div class="wrap reveal">
+  <div class="kicker">Section 2 · Interactive</div>
+  <h2><span class="n">02</span>Inside the MMA: column meets row, 16 times at once</h2>
+  <p class="lead">The trick of matrix multiply is that every output D[m][n] needs the same k-sweep:
+     column k of A meets row k of B. A tensor core computes <em>all 16 outputs simultaneously</em> —
+     each k-step advances every cell of D by one term. Press play and watch one full MMA.</p>
+
+  <div class="panel">
+    <div class="mma-row">
+      <div class="mgcol"><div class="mg" id="gA"></div><div class="eqlab">A · 4×4</div></div>
+      <div class="mgop">×</div>
+      <div class="mgcol"><div class="mg" id="gB"></div><div class="eqlab">B · 4×4</div></div>
+      <div class="mgop">=</div>
+      <div class="mgcol"><div class="mg d" id="gD"></div><div class="eqlab">D · click a cell to focus</div></div>
+    </div>
+    <div class="mctl">
+      <button class="btn primary" id="mmaPlay">▶ Play</button>
+      <button class="btn" id="mmaStep">Step ›</button>
+      <button class="btn" id="mmaReset">↺ Reset</button>
+      <div class="kbadge">k-sweep: <b id="mmaK">idle</b></div>
+    </div>
+    <div class="mread2" id="mmaRead"></div>
+    <div class="mchips">
+      <span class="mchip">FLOPs retired: <b id="mmaFlops">0 / 128</b></span>
+      <span class="mchip">every output advances <b>together</b> — that's the parallelism</span>
+    </div>
+  </div>
+</div></section>
+
+<!-- ============ 3. LADDER ============ -->
+<section id="ladder"><div class="wrap reveal">
+  <div class="kicker">Section 3</div>
+  <h2><span class="n">03</span>The throughput ladder: 67 → 2000 → 4000 TFLOPS</h2>
+  <p class="lead">Same chip, three very different ceilings. The CUDA cores are general-purpose; the
+     tensor cores only do matrix math, but they do it 30–60× faster. This is why inference converts
+     every hot op it can into a batched matmul.</p>
+
+  <div class="panel">
+    <div class="hw-row" id="hwRow">
+      <button class="preset on" data-hw="h100">H100 · Hopper · 4th-gen TC</button>
+      <button class="preset" data-hw="b200">B200 · Blackwell · 5th-gen TC</button>
+    </div>
+    <div id="ladBars"></div>
+    <div class="cmp3" style="margin-top:4px">
+      <div class="lbl"></div>
+      <div class="ticks" id="ladTicks"></div>
+      <div></div>
+    </div>
+
+    <div class="prec-row" style="margin-top:22px">
+      <button class="preset" data-p="fp32">FP32 · CUDA cores</button>
+      <button class="preset on" data-p="fp16">FP16 · tensor cores</button>
+      <button class="preset" data-p="fp8">FP8 · tensor cores</button>
+      <button class="preset" data-p="fp4">FP4 · tensor cores</button>
+    </div>
+    <div class="verdict v1" id="ladVerdict"></div>
+
+    <div class="chips" id="ladStats" style="margin-top:20px"></div>
+    <p class="note">Fine print: bars use NVIDIA's headline numbers, which are <em>sparse-inclusive</em> —
+       dense is half (H100: ~990 dense FP16 / ~1980 FP8). The 4×4×4 primitive is the <em>unit</em> of
+       work: Hopper's cores issue larger 64-wide warpgroup MMAs per cycle, which is how the chip reaches
+       its full spec. B200 figures are NVIDIA's GB200 NVL72 spec ÷ 72 per GPU; HGX B200 SKUs run a
+       notch lower (~2.25 / ~4.5 / ~9 PFLOPS dense). Blackwell Ultra (GB300, 2025) lifts dense FP4 to
+       ~15 PFLOPS per GPU. Next stop: Vera Rubin, announced for 2H 2026 — HBM4, with NVFP4 moving into
+       training too.</p>
+  </div>
+
+  <div class="panel" style="margin-top:14px">
+    <h3 style="margin:0 0 4px;font-size:16px">Since Hopper, in one glance</h3>
+    <div class="genrow">
+      <div class="gencard">
+        <span class="gk">2022 · this page's silicon</span>
+        <h3 style="color:var(--accent)">Hopper · H100</h3>
+        <p>4th-gen tensor cores — the ones dissected above. FP8 debuts at 2× the FP16 rate. 528 cores
+           across 132 SMs, and the 4×4×4 MMA is still the atom everything is built from.</p>
+        <span class="gm" style="color:var(--accent);border-color:rgba(88,166,255,.4);background:rgba(88,166,255,.08)">FP16 990 · FP8 1980 TFLOPS dense</span>
+      </div>
+      <div class="gencard">
+        <span class="gk">2024–25 · shipping</span>
+        <h3 style="color:var(--nvidia)">Blackwell · B200 / GB200</h3>
+        <p>5th-gen tensor cores add 4-bit: <b>NVFP4</b> (E2M1 elements, per-16 E4M3 block scales, FP8
+           tensor scale) plus MXFP6/MXFP4 microscaling, decoupled FP32 accumulation, and hardware
+           decompression engines. Two reticle-limit dies under one package — NVIDIA stops quoting
+           tensor-core counts and leads with per-format PFLOPS.</p>
+        <span class="gm">FP4 10 · FP8 5 · FP16 2.5 PFLOPS dense / GPU</span>
+      </div>
+      <div class="gencard">
+        <span class="gk">2025 → 2027 · rolling out</span>
+        <h3>Blackwell Ultra → Rubin</h3>
+        <p>GB300 (2025) lifts dense FP4 to ~15 PFLOPS per GPU. <b>Vera Rubin</b> (announced for 2H 2026)
+           moves to HBM4 and pushes NVFP4 into training as well as inference; Rubin Ultra follows in
+           2027. The ladder keeps growing at the bottom — each new format doubles the top again.</p>
+        <span class="gm">Vera Rubin · 2H 2026 · HBM4</span>
+      </div>
+    </div>
+    <p class="note">Nothing on this page gets easier on newer silicon: tiles-of-16, alignment, and dtype
+       rules all still apply — the multiplier got bigger, not the tolerance. If anything, dropping to
+       FP4 makes clean shapes worth <em>more</em>, since every misaligned row now wastes cheaper-but-still-precious bandwidth.</p>
+  </div>
+</div></section>
+
+<!-- ============ 4. WMMA ============ -->
+<section id="wmma"><div class="wrap reveal">
+  <div class="kicker">Section 4 · Walkthrough</div>
+  <h2><span class="n">04</span>Driving them: fragments in, mma_sync, fragments out</h2>
+  <p class="lead">You can't issue tensor-core ops from plain CUDA C++. You reach them through
+     <b>WMMA</b> intrinsics (what's below), <b>cuBLAS / cuDNN</b>, or <b>Triton</b> — which generates
+     them for you. WMMA works on 16×16 tiles: load fragments into registers, run one instruction,
+     store the result.</p>
+
+  <div class="panel">
+    <div class="wm">
+      <pre class="code"><span class="k">using namespace</span> wmma;
+<span class="ln" data-i="0">wmma::<span class="t">fragment</span>&lt;wmma::<span class="t">matrix_a</span>, 16,16,16,</span>
+<span class="ln" data-i="0">                <span class="t">half</span>, wmma::row_major&gt; a_frag;</span>
+<span class="ln" data-i="1">wmma::<span class="t">fragment</span>&lt;wmma::<span class="t">matrix_b</span>, 16,16,16,</span>
+<span class="ln" data-i="1">                <span class="t">half</span>, wmma::col_major&gt; b_frag;</span>
+<span class="ln" data-i="2">wmma::<span class="t">fragment</span>&lt;wmma::<span class="t">accumulator</span>, 16,16,16, <span class="t">float</span>&gt; c_frag;</span>
+
+<span class="ln" data-i="3">wmma::<span class="f">load_matrix_sync</span>(a_frag, a_ptr, lda);  <span class="c">// → registers</span></span>
+<span class="ln" data-i="4">wmma::<span class="f">load_matrix_sync</span>(b_frag, b_ptr, ldb);</span>
+<span class="ln" data-i="5">wmma::<span class="f">fill_fragment</span>(c_frag, 0.0f);           <span class="c">// the "+C"</span></span>
+
+<span class="ln" data-i="6">wmma::<span class="f">mma_sync</span>(c_frag, a_frag, b_frag, c_frag);  <span class="c">// ← tensor cores</span></span>
+
+<span class="ln" data-i="7">wmma::<span class="f">store_matrix_sync</span>(c_ptr, c_frag, ldc,</span>
+<span class="ln" data-i="7">                        wmma::mem_row_major);</span></pre>
+
+      <div>
+        <div class="fragt">
+          <div class="flab"><span>A · 16×16 · row_major</span><span class="st" id="stA">global</span></div>
+          <div class="frag" id="fA"></div>
+        </div>
+        <div class="fragt">
+          <div class="flab"><span>B · 16×16 · col_major</span><span class="st" id="stB">global</span></div>
+          <div class="frag" id="fB"></div>
+        </div>
+        <div class="fragt">
+          <div class="flab"><span>C / D · 16×16 · accumulator (fp32)</span><span class="st" id="stC">uninitialized</span></div>
+          <div class="frag" id="fC"></div>
+        </div>
+        <div class="wm-ctl">
+          <button class="btn" id="wPrev">‹ Prev</button>
+          <button class="btn primary" id="wPlay">▶ Auto</button>
+          <button class="btn" id="wNext">Next ›</button>
+          <span class="wsteplbl" id="wStepLbl"></span>
+        </div>
+        <div class="wcap" id="wCap"></div>
+      </div>
+    </div>
+    <p class="note">One mma_sync on a 16×16×16 tile = 4096 multiply-adds = 8192 FLOPs in a single
+       instruction. A real GEMM loops this over K-tiles and sweeps many M×N tiles — which is exactly
+       what cuBLAS and Triton unroll for you.</p>
+  </div>
+</div></section>
+
+<!-- ============ 5. ODD SIZES ============ -->
+<section id="oddsizes"><div class="wrap reveal">
+  <div class="kicker">Section 5 · Interactive</div>
+  <h2><span class="n">05</span>The odd-size tax: 1024 hits 120 TFLOPS, 1025 drops to 80</h2>
+  <p class="lead">Tensor cores want tiles that are multiples of 16 and memory that's aligned. When a
+     dimension isn't, libraries pad it — and lose 128-bit vectorized loads along the way. Drag the
+     size and watch two separate taxes appear: <b>padding waste</b> (small) and <b>row misalignment</b>
+     (the expensive one).</p>
+
+  <div class="panel">
+    <div class="presets" id="oPresets">
+      <button class="preset" data-s="512">512</button>
+      <button class="preset" data-s="1024">1024 · power of 2</button>
+      <button class="preset" data-s="1025">1025</button>
+      <button class="preset" data-s="1031">1031 · prime</button>
+      <button class="preset" data-s="2048">2048</button>
+    </div>
+    <div class="ctl">
+      <label>Matrix dimension N — square fp16 matmul, N×N <span class="val" id="oVal">1024</span></label>
+      <input type="range" id="oRange" min="256" max="2048" step="1" value="1024">
+    </div>
+
+    <div class="osz">
+      <div class="oszbox">
+        <h3>① Tile padding</h3>
+        <div class="osub">N split into ⌈N/16⌉ tiles of 16 — the gray-orange sliver is a padded, wasted column</div>
+        <div class="tiles" id="oTiles"></div>
+        <div class="tiles-cap" id="oTilesCap"></div>
+      </div>
+      <div class="oszbox">
+        <h3>② Row alignment</h3>
+        <div class="osub" id="oAlignSub">start byte of each row, mod 16 — green = 16 B-aligned</div>
+        <div class="alignh" id="oAlignH"></div>
+        <div id="oAlignRows"></div>
+      </div>
+    </div>
+
+    <div class="estats">
+      <div class="estat" id="oPad"><b>64</b><span>tiles across · padded width 1024</span></div>
+      <div class="estat" id="oWaste"><b>0%</b><span>of the padded FLOPs wasted on padding</span></div>
+      <div class="estat" id="oAlign"><b>16 / 16</b><span>of the first 16 rows start 16 B-aligned</span></div>
+      <div class="estat" id="oTf"><b>120</b><span>TFLOPS · fp16 matmul (see bench below)</span></div>
+    </div>
+
+    <div class="measbar">
+      <h3>Measured throughput — same GPU, one integer apart</h3>
+      <div class="cmp">
+        <div class="lbl"><b id="oBarVal">120 TFLOPS</b>N = <span id="oBarN">1024</span></div>
+        <div><div class="tbar"><div class="fill good" id="oBarFill" style="width:0"></div></div>
+          <div class="ticks"><span>0</span><span id="oBarTick">140 TFLOPS scale</span></div></div>
+      </div>
+      <div class="verdict v1" id="oVerdict"></div>
+      <div class="legend">
+        <span><i style="background:var(--work)"></i>measured (chapter bench)</span>
+        <span><i style="background:#5b6f92"></i>model estimate — pad waste × alignment, calibrated on the two measured points</span>
+      </div>
+    </div>
+
+    <pre class="code"><span class="c"># the bench behind those numbers — try your real shapes, not 1024</span>
+<span class="k">def</span> <span class="f">compare_matmul_sizes</span>(n):
+    a = torch.<span class="f">randn</span>(n, n, dtype=torch.float16, device=<span class="s">"cuda"</span>)
+    b = torch.<span class="f">randn</span>(n, n, dtype=torch.float16, device=<span class="s">"cuda"</span>)
+    start = torch.cuda.<span class="f">Event</span>(enable_timing=<span class="k">True</span>)
+    end   = torch.cuda.<span class="f">Event</span>(enable_timing=<span class="k">True</span>)
+
+    start.<span class="f">record</span>()
+    <span class="k">for</span> _ <span class="k">in</span> <span class="f">range</span>(100):
+        c = torch.<span class="f">matmul</span>(a, b)
+    end.<span class="f">record</span>()
+    torch.cuda.<span class="f">synchronize</span>()
+
+    elapsed = start.<span class="f">elapsed_time</span>(end) / 100      <span class="c"># ms per matmul</span>
+    <span class="k">return</span> 2 * n**3 / elapsed / 1e9              <span class="c"># TFLOPS</span></pre>
+
+    <div class="caveat"><b>⚠ Where odd sizes come from:</b> vocabulary sizes. GPT-2's 50257 → padded to
+       50272 (next multiple of 16). A few padded embedding rows cost almost nothing; a misaligned
+       leading dimension taxes <em>every</em> GEMM against that matrix. Pad once, at load time.</div>
+    <p class="note">WMMA's own contract makes this explicit: the leading dimension (ldm) passed to
+       load/store must be a multiple of 16 bytes. At N=1025, rows stride 2050 B — not a multiple of
+       16 — so fragments can't load the fast way at all. The model bar divides throughput by 1.5×
+       when any row is misaligned, which reproduces the measured 120 → 80 drop.</p>
+  </div>
+</div></section>
+
+<!-- ============ 6. RULES ============ -->
+<section id="rules"><div class="wrap reveal">
+  <div class="kicker">Section 6</div>
+  <h2><span class="n">06</span>Four habits that keep the tensor cores fed</h2>
+  <p class="lead">You will almost never write <code>wmma::mma_sync</code> in production. Your job is to
+     hand the libraries shapes and dtypes they can feed the cores with — and to notice when you haven't.</p>
+
+  <div class="strats">
+    <div class="strat star">
+      <span class="badge">dtype 101</span>
+      <h3>Ride the right dtypes</h3>
+      <p>Tensor cores speak fp16, bf16, int8; Hopper added fp8; Blackwell's 5th-gen cores added fp4
+         (NVFP4 / MXFP4) — each step down doubles the math again. Plain fp32 matmul doesn't touch any
+         of them unless you enable TF32. Keep weights and activations in bf16/fp16, quantize to
+         fp8/fp4 where accuracy allows, and check <code>torch.get_float32_matmul_precision()</code>
+         if a legacy fp32 path is slow.</p>
+      <div class="mini"><span class="m bad">fp32 · cuda cores</span><span class="arr">→</span><span class="m hi">bf16 / tf32 · 30×</span><span class="arr">→</span><span class="m hi">fp8 · 60×</span><span class="arr">→</span><span class="m hi">fp4 · 250× (Blackwell)</span></div>
+    </div>
+    <div class="strat">
+      <h3>Pad odd dimensions to multiples of 16</h3>
+      <p>Vocab 50257 → 50272. Seq len 1025 → 1040. Padding waste at one tile edge is ~1%; the
+         misalignment it fixes is a 33% throughput drop. Pad at weight-load time, once, not per batch.</p>
+      <div class="mini"><span class="m bad">50257</span><span class="arr">→</span><span class="m hi">pad 15 rows</span><span class="arr">→</span><span class="m hi">50272 ✓ aligned</span></div>
+    </div>
+    <div class="strat">
+      <h3>Reach for libraries, not WMMA</h3>
+      <p><code>torch.matmul</code>, cuBLAS, cuDNN, and Triton's <code>tl.dot</code> all emit
+         tensor-core instructions automatically, with the tiling, swizzling, and K-loops done right.
+         Hand-written WMMA is for exotic fused kernels — and even then Triton usually gets there first.</p>
+      <div class="mini"><span class="m">torch.matmul</span><span class="arr">+</span><span class="m">tl.dot</span><span class="arr">→</span><span class="m hi">mma.sync, for free</span></div>
+    </div>
+    <div class="strat">
+      <h3>Bench the shapes you ship</h3>
+      <p>Power-of-2 toy benchmarks hide the tax your real shapes pay. Run the
+         <code>compare_matmul_sizes</code> bench with production dimensions — vocab, seq, batch × head
+         counts — and compare achieved TFLOPS against the ~120 fp16 reference before blaming the kernel.</p>
+      <div class="mini"><span class="m">bench real N</span><span class="arr">&lt;</span><span class="m">80% of ref?</span><span class="m bad">check padding &amp; dtype</span></div>
+    </div>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <div class="formula">⌈1025 ÷ 16⌉ × 16 = <b>1040</b> → padding costs 1.4% of the FLOPs,
+    yet measured throughput falls <b>33%</b> — the odd-size tax is alignment, not arithmetic</div>
+  <div class="fin">Tensor Cores · part of the physics-llm-inference series · prev: memory coalescing &amp; shared-memory tiling</div>
+</div></footer>
+
+<script>
+(function(){
+  "use strict";
+  var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  function el(tag, cls, txt){
+    var e = document.createElement(tag);
+    if(cls) e.className = cls;
+    if(txt !== undefined) e.textContent = txt;
+    return e;
+  }
+
+  /* ---------- reveal on scroll ---------- */
+  var io = new IntersectionObserver(function(es){
+    es.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add("in"); io.unobserve(e.target);} });
+  },{threshold:.12});
+  document.querySelectorAll(".reveal").forEach(function(el2){ io.observe(el2); });
+
+  /* ---------- shared MMA data ---------- */
+  var A = [[1,2,0,2],[3,1,1,0],[0,2,2,3],[1,0,3,1]];
+  var B = [[2,0,1,1],[0,3,0,2],[1,1,2,0],[2,2,0,3]];
+  function dval(m,n,upto){ var s=0; for(var k=0;k<upto;k++) s+=A[m][k]*B[k][n]; return s; }
+
+  /* ---------- 1. anatomy ---------- */
+  var eqVals = { eqA:A, eqB:B, eqC:[[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,0]] };
+  ["eqA","eqB","eqC"].forEach(function(id){
+    var g = document.getElementById(id);
+    eqVals[id].forEach(function(row){ row.forEach(function(v){ g.appendChild(el("div","q",String(v))); }); });
+  });
+  var eqD = document.getElementById("eqD");
+  for(var m0=0;m0<4;m0++) for(var n0=0;n0<4;n0++) eqD.appendChild(el("div","q",String(dval(m0,n0,4))));
+
+  var panCuda = document.getElementById("panCuda"), panTc = document.getElementById("panTc");
+  var cycbar = document.getElementById("cycbar"), dgrid = document.getElementById("dgrid");
+  var cycCudaEl = document.getElementById("cycCuda"), cycTcEl = document.getElementById("cycTc");
+  for(var c0=0;c0<64;c0++) cycbar.appendChild(el("div","cc"));
+  for(var d0=0;d0<16;d0++) dgrid.appendChild(el("div","dq",String(dval(Math.floor(d0/4),d0%4,4))));
+
+  var side = -1, subTimer = null, mainTimer = null;
+  function clearSub(){ if(subTimer){ clearInterval(subTimer); subTimer = null; } }
+  function resetVisuals(){
+    Array.prototype.forEach.call(cycbar.children, function(cc){ cc.classList.remove("on"); });
+    Array.prototype.forEach.call(dgrid.children, function(dq){ dq.classList.remove("hit"); });
+  }
+  function animateSide(which){
+    clearSub(); resetVisuals();
+    if(which === 0){
+      if(reduceMotion){
+        cycCudaEl.textContent = "64 / 64";
+        Array.prototype.forEach.call(cycbar.children, function(cc){ cc.classList.add("on"); });
+        return;
+      }
+      var k = 0;
+      subTimer = setInterval(function(){
+        k++;
+        cycbar.children[k-1].classList.add("on");
+        cycCudaEl.textContent = k + " / 64";
+        if(k >= 64) clearSub();
+      }, 34);
+    } else {
+      cycTcEl.textContent = "1 / 1 ✓";
+      Array.prototype.forEach.call(dgrid.children, function(dq){ dq.classList.add("hit"); });
+    }
+  }
+  function setSide(which){
+    if(which === side) return;
+    side = which;
+    panCuda.classList.toggle("active", which===0);
+    panTc.classList.toggle("active", which===1);
+    cycCudaEl.textContent = which===0 ? "0 / 64" : "—";
+    cycTcEl.textContent   = which===1 ? "waiting…" : "—";
+    animateSide(which);
+  }
+  panCuda.addEventListener("click", function(){ setSide(0); });
+  panTc.addEventListener("click", function(){ setSide(1); });
+  if(reduceMotion){
+    panCuda.classList.add("active"); panTc.classList.add("active");
+    cycCudaEl.textContent = "64 / 64"; cycTcEl.textContent = "1 / 1 ✓";
+    Array.prototype.forEach.call(cycbar.children, function(cc){ cc.classList.add("on"); });
+    Array.prototype.forEach.call(dgrid.children, function(dq){ dq.classList.add("hit"); });
+  } else {
+    setSide(0);
+    mainTimer = setInterval(function(){ setSide(side===0 ? 1 : 0); }, 2800);
+  }
+
+  /* ---------- 2. mma explorer ---------- */
+  var gA = document.getElementById("gA"), gB = document.getElementById("gB"), gD = document.getElementById("gD");
+  var cellA = [], cellB = [], cellD = [];
+  for(var r1=0;r1<4;r1++){
+    cellA.push([]); cellB.push([]); cellD.push([]);
+    for(var c1=0;c1<4;c1++){
+      var a = el("div","g",String(A[r1][c1])); gA.appendChild(a); cellA[r1].push(a);
+      var b = el("div","g",String(B[r1][c1])); gB.appendChild(b); cellB[r1].push(b);
+      var d = el("div","g",String(dval(r1,c1,4)));
+      d.dataset.r = r1; d.dataset.c = c1; gD.appendChild(d); cellD[r1].push(d);
+    }
+  }
+  var mmaPlayBtn = document.getElementById("mmaPlay"), mmaStepBtn = document.getElementById("mmaStep"),
+      mmaResetBtn = document.getElementById("mmaReset"), mmaK = document.getElementById("mmaK"),
+      mmaRead = document.getElementById("mmaRead"), mmaFlops = document.getElementById("mmaFlops");
+  var mStep = 0, mFocus = [1,2], mTimer = null, mPlaying = false, hotTimer = null;
+
+  function renderMMA(pulse){
+    var k = mStep - 1;   // index of the last completed k-step
+    for(var r=0;r<4;r++) for(var c=0;c<4;c++){
+      var ka = cellA[r][c], kb = cellB[r][c], dc = cellD[r][c];
+      ka.className = "g" + (k>=0 && c===k ? " k" : "");
+      kb.className = "g" + (k>=0 && r===k ? " k" : "");
+      var cls = "g";
+      if(mStep>0) cls += " res";
+      if(mStep===4) cls += " fin";
+      if(pulse && mStep>0) cls += " hot";
+      if(r===mFocus[0] && c===mFocus[1]) cls += " focus";
+      dc.className = cls;
+      dc.textContent = String(dval(r,c,mStep));
+    }
+    mmaK.textContent = k>=0 ? "k = " + k + " done" : "idle";
+    mmaFlops.textContent = (mStep*32) + " / 128";
+
+    var m = mFocus[0], n = mFocus[1], parts = [];
+    for(var j=0;j<4;j++){
+      var term = A[m][j] + "·" + B[j][n];
+      parts.push(el("span","term " + (j<mStep ? "done":"wait"), term));
+      if(j<3) parts.push(el("span","term wait"," + "));
+    }
+    parts.push(el("span","term wait"," = "));
+    var fin = el("span","term " + (mStep===4 ? "done":"wait"), String(dval(m,n,mStep)));
+    parts.push(fin);
+    var read = mmaRead;
+    read.textContent = "";
+    read.appendChild(el("span","fx","D["+m+"]["+n+"] = "));
+    parts.forEach(function(p){ read.appendChild(p); });
+    read.appendChild(el("span","fx", "   (row " + m + " of A · column " + n + " of B — click any D cell to refocus)"));
+    if(pulse && !reduceMotion){
+      clearTimeout(hotTimer);
+      hotTimer = setTimeout(function(){
+        for(var r2=0;r2<4;r2++) for(var c2=0;c2<4;c2++) cellD[r2][c2].classList.remove("hot");
+      }, 380);
+    }
+  }
+  function mPlay(){
+    if(mPlaying) return;
+    mPlaying = true; mmaPlayBtn.textContent = "⏸ Pause";
+    if(reduceMotion){ mStep = 4; renderMMA(false); return; }
+    mTimer = setInterval(function(){
+      if(mStep < 4){ mStep++; renderMMA(true); }
+      else { mStep = 0; renderMMA(false); }
+    }, 1100);
+  }
+  function mPause(){
+    mPlaying = false; mmaPlayBtn.textContent = "▶ Play";
+    if(mTimer){ clearInterval(mTimer); mTimer = null; }
+  }
+  mmaPlayBtn.addEventListener("click", function(){ mPlaying ? mPause() : mPlay(); });
+  mmaStepBtn.addEventListener("click", function(){
+    mPause();
+    if(mStep < 4){ mStep++; renderMMA(true); } else { mStep = 0; renderMMA(false); }
+  });
+  mmaResetBtn.addEventListener("click", function(){ mPause(); mStep = 0; renderMMA(false); });
+  gD.addEventListener("click", function(ev){
+    var t = ev.target;
+    if(!t.dataset || t.dataset.r === undefined) return;
+    mFocus = [parseInt(t.dataset.r,10), parseInt(t.dataset.c,10)];
+    renderMMA(false);
+  });
+  if(reduceMotion){ mStep = 4; }
+  renderMMA(false);
+
+  /* ---------- 3. ladder ---------- */
+  var LADDER = {
+    h100: {
+      ticks:["0","1k","2k","3k","4k TFLOPS"],
+      rows:[
+        { val:"~67 TFLOPS",  name:"CUDA cores · FP32",         frac:0.017, cls:"dim",  color:"var(--accent)",  ratio:"baseline", inner:"" },
+        { val:"~2000 TFLOPS",name:"tensor cores · FP16",        frac:0.5,   cls:"good", color:"var(--work)",    ratio:"30×",      inner:"30×" },
+        { val:"~4000 TFLOPS",name:"tensor cores · FP8 (new)",   frac:1.0,   cls:"nv",   color:"var(--nvidia)",  ratio:"60×",      inner:"60×" }
+      ],
+      stats:[
+        ["528","tensor cores · 132 SMs × 4 per SM"],
+        ["128","FLOPs per core-cycle · one 4×4×4 MMA"],
+        ["1.8 GHz","boost clock"]
+      ]
+    },
+    b200: {
+      ticks:["0","5k","10k","15k","20k TFLOPS"],
+      rows:[
+        { val:"~80 TFLOPS",  name:"CUDA cores · FP32",         frac:0.004, cls:"dim",  color:"var(--accent)",  ratio:"baseline", inner:"" },
+        { val:"~5 PFLOPS",   name:"tensor cores · FP16/BF16",  frac:0.25,  cls:"good", color:"var(--work)",    ratio:"62×",      inner:"62×" },
+        { val:"~10 PFLOPS",  name:"tensor cores · FP8/FP6",    frac:0.5,   cls:"nv",   color:"var(--nvidia)",  ratio:"125×",     inner:"125×" },
+        { val:"~20 PFLOPS",  name:"NVFP4 · Blackwell new",     frac:1.0,   cls:"nv",   color:"var(--nvidia)",  ratio:"250×",     inner:"250×" }
+      ],
+      stats:[
+        ["208B","transistors · two reticle-limited dies"],
+        ["10 TB/s","NV-HBI die-to-die bandwidth"],
+        ["192 GB","HBM3e @ 8 TB/s per GPU"]
+      ]
+    }
+  };
+  var LADVERDICTS = {
+    "h100-fp32": { cls:"verdict v2", html:"<b>~67 TFLOPS</b> — the whole chip's 16,896 FP32 CUDA cores (132 SMs × 128) at 2 FLOPs each, per cycle. This is your ceiling for anything that isn't a tensor-core dtype+shape: norms, elementwise ops, attention glue." },
+    "h100-fp16": { cls:"verdict v1", html:"<b>~2000 TFLOPS</b> — 528 4th-gen tensor cores on fp16 (fp32 accumulate). 30× the CUDA cores for matrix math. Spec: ~990 dense / ~2000 with 2:4 sparsity. Inference lives here: keep weights bf16/fp16." },
+    "h100-fp8":  { cls:"verdict v3", html:"<b>~4000 TFLOPS</b> — same units, half-byte inputs. FP8 (new in Hopper) doubles the math per cycle again: 60× the CUDA cores. The endgame for quantized inference — if your accuracy budget allows it." },
+    "h100-fp4":  { cls:"verdict v2", html:"<b>Not on Hopper.</b> 4-bit needs Blackwell's 5th-generation tensor cores — flip the hardware switch above to B200, where NVFP4 doubles FP8 again." },
+    "b200-fp32": { cls:"verdict v2", html:"<b>~80 TFLOPS</b> — B200's FP32 CUDA cores. Only ~20% more than H100: general-purpose scalar throughput barely moves generation to generation. All the new FLOPs land in the tensor cores." },
+    "b200-fp16": { cls:"verdict v1", html:"<b>~5 PFLOPS</b> sparse (2.5 dense) — FP16/BF16 on 5th-gen tensor cores, ~2.3× H100 per GPU, with decoupled FP32 accumulation keeping the precision at full rate." },
+    "b200-fp8":  { cls:"verdict v3", html:"<b>~10 PFLOPS</b> sparse (5 dense) — second-gen FP8, plus MXFP8 microscaling (shared per-block scales) that makes 8-bit training and inference sturdier." },
+    "b200-fp4":  { cls:"verdict v3", html:"<b>~20 PFLOPS</b> sparse (10 dense) — NVFP4: E2M1 elements with per-16-element E4M3 block scales plus an FP8 per-tensor scale. Two-level microscaling is what makes 4-bit inference hold up. ~250× this die's CUDA cores." }
+  };
+  var ladBars = document.getElementById("ladBars"), ladTicks = document.getElementById("ladTicks"),
+      ladStats = document.getElementById("ladStats"), ladVerdict = document.getElementById("ladVerdict");
+  var curHw = "h100", curPrec = "fp16";
+
+  function renderLadderStats(H){
+    ladStats.textContent = "";
+    H.stats.forEach(function(s, i){
+      var chip = el("div", "chip c" + ((i % 3) + 1));
+      chip.appendChild(el("b", null, s[0]));
+      chip.appendChild(el("span", null, s[1]));
+      ladStats.appendChild(chip);
+    });
+  }
+  function buildLadder(){
+    var H = LADDER[curHw];
+    ladBars.textContent = "";
+    ladTicks.textContent = "";
+    H.ticks.forEach(function(t){ ladTicks.appendChild(el("span", null, t)); });
+    H.rows.forEach(function(r){
+      var row = el("div", "cmp3");
+      var lbl = el("div", "lbl");
+      lbl.appendChild(el("b", null, r.val));
+      lbl.appendChild(document.createTextNode(r.name));
+      var mid = el("div"), tbar = el("div", "tbar"), fill = el("div", "fill " + r.cls);
+      if(r.inner) fill.textContent = r.inner;
+      tbar.appendChild(fill); mid.appendChild(tbar);
+      var ratio = el("div", "ratio", r.ratio);
+      ratio.style.color = r.color;
+      row.appendChild(lbl); row.appendChild(mid); row.appendChild(ratio);
+      ladBars.appendChild(row);
+    });
+    renderLadderStats(H);
+    var msg = LADVERDICTS[curHw + "-" + curPrec];
+    ladVerdict.className = msg.cls;
+    ladVerdict.innerHTML = msg.html;
+  }
+  function fillLadder(){
+    var fills = ladBars.querySelectorAll(".fill");
+    LADDER[curHw].rows.forEach(function(r, i){ fills[i].style.width = (r.frac * 100) + "%"; });
+  }
+  function switchHw(hw){
+    if(hw === curHw) return;
+    curHw = hw;
+    document.querySelectorAll("#hwRow .preset").forEach(function(x){ x.classList.toggle("on", x.dataset.hw === hw); });
+    buildLadder();
+    if(reduceMotion) fillLadder();
+    else requestAnimationFrame(function(){ requestAnimationFrame(fillLadder); });
+  }
+  document.querySelectorAll("#hwRow .preset").forEach(function(b){
+    b.addEventListener("click", function(){ switchHw(b.dataset.hw); });
+  });
+  document.querySelectorAll("#ladder .prec-row .preset").forEach(function(b){
+    b.addEventListener("click", function(){
+      document.querySelectorAll("#ladder .prec-row .preset").forEach(function(x){ x.classList.remove("on"); });
+      b.classList.add("on");
+      curPrec = b.dataset.p;
+      var msg = LADVERDICTS[curHw + "-" + curPrec];
+      ladVerdict.className = msg.cls;
+      ladVerdict.innerHTML = msg.html;
+    });
+  });
+  buildLadder();
+
+  var ladFilled = false;
+  function fillLadderOnce(){
+    if(ladFilled) return; ladFilled = true;
+    fillLadder();
+  }
+  if(reduceMotion){ fillLadderOnce(); }
+  else{
+    var io2 = new IntersectionObserver(function(es){
+      es.forEach(function(e){ if(e.isIntersecting){ setTimeout(fillLadderOnce,250); io2.disconnect(); } });
+    },{threshold:.4});
+    io2.observe(document.querySelector("#ladder .panel"));
+  }
+
+  /* ---------- 4. wmma walkthrough ---------- */
+  var fA = document.getElementById("fA"), fB = document.getElementById("fB"), fC = document.getElementById("fC");
+  var stA = document.getElementById("stA"), stB = document.getElementById("stB"), stC = document.getElementById("stC");
+  function buildFrag(container){
+    for(var i=0;i<256;i++){
+      var cell = el("i");
+      if(!reduceMotion) cell.style.transitionDelay = (i%16)*22 + Math.floor(i/16)*9 + "ms";
+      container.appendChild(cell);
+    }
+  }
+  buildFrag(fA); buildFrag(fB); buildFrag(fC);
+
+  var steps = [
+    { lines:[0,1,2], cap:"<b>Declare fragments.</b> A fragment is the warp's register-resident view of a tile: 256 halves spread across 32 threads — 8 values each. The layout hints (row_major / col_major) tell the loader how the tile sits in memory; fragments absorb the difference so mma_sync never cares." },
+    { lines:[3], cap:"<b>load_matrix_sync(A).</b> The warp cooperatively hauls the 16×16 tile from global memory into registers. Note <b>lda</b> — the leading dimension of the source matrix. It must keep rows aligned (multiples of 16 bytes); section 05 shows what happens when it isn't." },
+    { lines:[4], cap:"<b>load_matrix_sync(B).</b> Same for the B tile — declared col_major here, i.e. effectively transposed. Layout conversions are free at the fragment level; that's why cuBLAS can pick per-operand layouts for bandwidth instead of for the math." },
+    { lines:[5], cap:"<b>fill_fragment(C, 0).</b> The accumulator starts at zero. This is the <b>+C</b> of D = A×B + C: initialize once and accumulate K-tiles in a loop by passing the same c_frag back into mma_sync." },
+    { lines:[6], cap:"<b>mma_sync — the only line that touches the tensor cores.</b> One instruction: 16×16×16 = 4096 multiply-adds = 8192 FLOPs. The warp stalls here for exactly one MMA latency while 528 cores across the chip do the same in parallel." },
+    { lines:[7], cap:"<b>store_matrix_sync.</b> D goes back to global memory in whatever layout the next consumer wants (row-major here, ld must be aligned). A real GEMM wraps all of this in loops over K-tiles and M×N tiles — which is what cuBLAS and Triton generate for you." }
+  ];
+  var wStep = 0, wPlaying = false, wTimer = null;
+  var wPrevBtn = document.getElementById("wPrev"), wNextBtn = document.getElementById("wNext"),
+      wPlayBtn = document.getElementById("wPlay"), wCap = document.getElementById("wCap"),
+      wStepLbl = document.getElementById("wStepLbl");
+
+  function applyWStep(){
+    document.querySelectorAll("#wmma .ln").forEach(function(ln){
+      var i = parseInt(ln.dataset.i,10);
+      ln.classList.toggle("on", steps[wStep].lines.indexOf(i) !== -1);
+    });
+    var fa = wStep>=1, fb = wStep>=2;
+    fA.className = "frag" + (fa ? " loaded" : "");
+    fB.className = "frag" + (fb ? " loaded" : "");
+    fC.className = "frag" + (wStep===3 ? " acc0" : wStep>=4 ? " acc1" : "") + (wStep===5 ? " stored" : "");
+    stA.textContent = fa ? "fragment ✓" : "global";
+    stB.textContent = fb ? "fragment ✓" : "global";
+    stC.textContent = wStep===3 ? "zeros" : wStep===4 ? "result ✓" : wStep===5 ? "→ global ✓" : "uninitialized";
+    wStepLbl.textContent = "step " + (wStep+1) + " / " + steps.length;
+    wCap.innerHTML = steps[wStep].cap;
+  }
+  function wAdvance(){
+    if(wStep < steps.length-1){ wStep++; applyWStep(); }
+    else { wStep = 0; applyWStep(); }
+  }
+  function wStart(){
+    if(wPlaying || reduceMotion) return;
+    wPlaying = true; wPlayBtn.textContent = "⏸ Pause";
+    wTimer = setInterval(wAdvance, 2400);
+  }
+  function wStop(){
+    wPlaying = false; wPlayBtn.textContent = "▶ Auto";
+    if(wTimer){ clearInterval(wTimer); wTimer = null; }
+  }
+  wPrevBtn.addEventListener("click", function(){ wStop(); if(wStep>0){ wStep--; applyWStep(); } });
+  wNextBtn.addEventListener("click", function(){ wStop(); wAdvance(); });
+  wPlayBtn.addEventListener("click", function(){ wPlaying ? wStop() : wStart(); });
+  applyWStep();
+
+  /* ---------- 5. odd sizes ---------- */
+  var oRange = document.getElementById("oRange"), oVal = document.getElementById("oVal"),
+      oTiles = document.getElementById("oTiles"), oTilesCap = document.getElementById("oTilesCap"),
+      oAlignH = document.getElementById("oAlignH"), oAlignRows = document.getElementById("oAlignRows"),
+      oPad = document.getElementById("oPad"), oWaste = document.getElementById("oWaste"),
+      oAlign = document.getElementById("oAlign"), oTf = document.getElementById("oTf"),
+      oBarFill = document.getElementById("oBarFill"), oVerdict = document.getElementById("oVerdict"),
+      oAlignSub = document.getElementById("oAlignSub");
+  var MEASURED = { 1024:120, 1025:80 };
+  var BAR_SCALE = 140;   // TFLOPS at 100% bar width
+
+  for(var h=0;h<16;h++) oAlignH.appendChild(el("span",null,String(h)));
+  var alRows = [];
+  for(var rr=0;rr<16;rr++){
+    var row = el("div","alrow"), marks = [];
+    for(var cc=0;cc<16;cc++){ var i2 = el("i"); row.appendChild(i2); marks.push(i2); }
+    oAlignRows.appendChild(row); alRows.push(marks);
+  }
+
+  function oddModel(n){
+    var tiles = Math.ceil(n/16), padded = tiles*16, padCols = padded - n;
+    var waste = padCols/padded;
+    var strideBytes = 2*n;                 // fp16 = 2 bytes
+    var offs = [], alignedRows = 0;
+    for(var r=0;r<16;r++){
+      var o = (strideBytes*r) % 16;
+      offs.push(o);
+      if(o===0) alignedRows++;
+    }
+    var fullyAligned = strideBytes % 16 === 0;
+    var est = 120 * (n/padded) * (fullyAligned ? 1 : 2/3);
+    return { tiles:tiles, padded:padded, padCols:padCols, waste:waste,
+             strideBytes:strideBytes, offs:offs, alignedRows:alignedRows,
+             fullyAligned:fullyAligned, est:est };
+  }
+
+  function renderOdd(){
+    var n = parseInt(oRange.value,10);
+    oVal.textContent = n;
+    var M = oddModel(n);
+
+    /* tiles strip */
+    oTiles.textContent = "";
+    for(var t=0;t<M.tiles;t++){
+      var tile = el("div","t");
+      if(t === M.tiles-1 && M.padCols > 0){
+        tile.classList.add("part");
+        tile.style.setProperty("--pw", (M.padCols/16*100)+"%");
+      }
+      oTiles.appendChild(tile);
+    }
+    oTilesCap.textContent = "";
+    oTilesCap.appendChild(document.createTextNode("⌈"+n+"/16⌉ = "+M.tiles+" tiles → padded width "));
+    var pb = el("b",null,String(M.padded));
+    oTilesCap.appendChild(pb);
+    oTilesCap.appendChild(document.createTextNode(" · "+M.padCols+" padded column"+(M.padCols===1?"":"s")+" · "));
+    var wb = el("b",null,(M.waste*100).toFixed(1)+"% waste");
+    oTilesCap.appendChild(wb);
+
+    /* alignment rows */
+    for(var r=0;r<16;r++){
+      var o = M.offs[r];
+      for(var c=0;c<16;c++){
+        alRows[r][c].className = (c===o) ? (o===0 ? "hit0" : "hitx") : "";
+      }
+    }
+    oAlignSub.textContent = "start byte of each row, mod 16 — stride 2·N = " + M.strideBytes +
+      " B → " + (M.fullyAligned ? "every row lands on 0 ✓" : "offsets cycle; green is rare ✗");
+
+    /* stats */
+    oPad.firstChild.textContent = M.tiles;
+    oPad.children[1].textContent = "tiles across · padded width " + M.padded;
+    oWaste.firstChild.textContent = (M.waste*100).toFixed(1) + "%";
+    oWaste.className = "estat " + (M.waste < 0.03 ? "good" : "bad");
+    oAlign.firstChild.textContent = M.alignedRows + " / 16";
+    oAlign.className = "estat " + (M.fullyAligned ? "good" : "bad");
+    oAlign.children[1].textContent = "of the first 16 rows start 16 B-aligned";
+
+    /* tflops bar */
+    var measured = MEASURED[n];
+    var tf, tag;
+    if(measured !== undefined){ tf = measured; tag = "TFLOPS · measured"; }
+    else { tf = M.est; tag = "TFLOPS · model est."; }
+    oTf.firstChild.textContent = (measured !== undefined ? tf : "≈" + Math.round(tf));
+    oTf.children[1].textContent = "TFLOPS · fp16 matmul " + (measured !== undefined ? "(measured)" : "(estimated)");
+    oTf.className = "estat " + (tf >= 110 ? "good" : "bad");
+    oBarFill.style.width = (tf/BAR_SCALE*100) + "%";
+    oBarFill.className = "fill " + (measured !== undefined ? "good" : "est");
+    document.getElementById("oBarVal").textContent =
+      (measured !== undefined ? tf : "≈" + Math.round(tf)) + " TFLOPS";
+    document.getElementById("oBarN").textContent = n;
+    document.getElementById("oBarTick").textContent = "scale 0–" + BAR_SCALE + " TFLOPS" +
+      (measured !== undefined ? " · measured on the chapter bench" : "");
+
+    /* verdict */
+    var v, cls;
+    if(n === 1024){ cls="v1"; v="Clean: every tile full, every row 16 B-aligned. Measured: 120 TFLOPS — the reference point."; }
+    else if(n === 1025){ cls="v2"; v="One extra column: padding waste is only 1.4%, yet measured throughput falls to 80 TFLOPS (−33%). Rows stride 2050 B — misaligned for 128-bit loads, so the library takes the slow path."; }
+    else if(!M.fullyAligned){ cls="v2"; v="N % 8 ≠ 0 → row starts land on a "+(2*n)%16+"-byte cycle mod 16, 128-bit vectorized loads break, and only "+M.alignedRows+" of 16 rows are 16 B-aligned. The model estimates ≈"+Math.round(tf)+" TFLOPS. Fix: pad N to "+(Math.ceil(n/16)*16)+"."; }
+    else if(M.padCols > 0){ cls="v1"; v="Rows stay aligned (N % 8 = 0 keeps 16 B strides) and only the edge tile is partial — "+(M.waste*100).toFixed(1)+"% padding waste, close to full speed."; }
+    else { cls="v1"; v="Power-of-2 clean: full tiles, aligned rows, full rate."; }
+    oVerdict.className = "verdict " + cls;
+    oVerdict.textContent = v;
+
+    document.querySelectorAll("#oPresets .preset").forEach(function(b){
+      b.classList.toggle("on", parseInt(b.dataset.s,10) === n);
+    });
+  }
+  oRange.addEventListener("input", renderOdd);
+  document.querySelectorAll("#oPresets .preset").forEach(function(b){
+    b.addEventListener("click", function(){ oRange.value = b.dataset.s; renderOdd(); });
+  });
+  renderOdd();
+})();
+</script>
+</body>
+</html>

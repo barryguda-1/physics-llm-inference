@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Memory Coalescing — Visual Explainer</title>
+<style>
+  :root{
+    --bg:#0a0e14; --panel:#101722; --panel2:#0c1220; --border:#1e2a3c;
+    --text:#dbe4ee; --muted:#7d8ca0; --faint:#4b5a6e;
+    --oh:#ff9040; --oh-dim:rgba(255,144,64,.16);
+    --work:#3fb950; --work-dim:rgba(63,185,80,.15);
+    --accent:#58a6ff; --nvidia:#76b900;
+    --mono:"Cascadia Code","JetBrains Mono",Consolas,ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:16px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+       -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 22px}
+  code,.mono{font-family:var(--mono)}
+  a{color:var(--accent)}
+
+  /* ---------- header ---------- */
+  header{padding:64px 0 40px;position:relative;overflow:hidden}
+  header::before{content:"";position:absolute;inset:0;
+    background:
+      radial-gradient(600px 300px at 15% 0%,rgba(63,185,80,.09),transparent 60%),
+      radial-gradient(700px 340px at 85% 10%,rgba(255,144,64,.09),transparent 60%);}
+  header .wrap{position:relative}
+  .kicker{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.16em;text-transform:uppercase}
+  h1{font-size:clamp(28px,5vw,44px);line-height:1.15;margin:10px 0 12px;letter-spacing:-.01em}
+  h1 .hl{color:var(--work)}
+  .sub{color:var(--muted);max-width:760px;font-size:17px}
+  .chips{display:flex;gap:12px;flex-wrap:wrap;margin-top:26px}
+  .chip{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:12px 18px;min-width:150px}
+  .chip b{display:block;font-family:var(--mono);font-size:22px;font-weight:600}
+  .chip span{color:var(--muted);font-size:12.5px}
+  .chip.c1 b{color:var(--work)} .chip.c2 b{color:var(--oh)} .chip.c3 b{color:var(--accent)}
+
+  nav.top{position:sticky;top:0;z-index:50;background:rgba(10,14,20,.88);backdrop-filter:blur(8px);
+          border-bottom:1px solid var(--border)}
+  nav.top .wrap{display:flex;gap:22px;padding:10px 22px;overflow-x:auto}
+  nav.top a{color:var(--muted);text-decoration:none;font-size:13.5px;white-space:nowrap;padding:4px 0}
+  nav.top a:hover{color:var(--text)}
+
+  section{padding:62px 0;border-top:1px solid var(--border)}
+  h2{font-size:26px;margin:6px 0 8px;letter-spacing:-.01em}
+  h2 .n{color:var(--faint);font-family:var(--mono);font-size:18px;margin-right:10px}
+  .lead{color:var(--muted);max-width:780px;margin:0 0 28px}
+  .lead code{color:var(--text);background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:1px 6px;font-size:.85em}
+
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:22px}
+  .note{font-size:12.5px;color:var(--faint);margin-top:12px}
+
+  /* ---------- 1. anatomy ---------- */
+  .ana{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
+  .ana-p{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:16px 16px 14px;
+         transition:border-color .35s,box-shadow .35s,transform .35s;opacity:.55;min-width:0}
+  .ana-p.active{opacity:1;transform:translateY(-3px)}
+  .ana-p.g.active{border-color:var(--work);box-shadow:0 0 0 1px var(--work),0 10px 30px -10px rgba(63,185,80,.45)}
+  .ana-p.o.active{border-color:var(--oh);box-shadow:0 0 0 1px var(--oh),0 10px 30px -10px rgba(255,144,64,.45)}
+  .ana-t{font-weight:700;font-size:13.5px;margin-bottom:2px}
+  .ana-s{color:var(--muted);font-size:11.5px;margin-bottom:12px}
+  .threads{display:grid;grid-template-columns:repeat(32,1fr);gap:3px;min-width:0}
+  .threads .th{min-width:0;overflow:hidden;height:13px;border-radius:3px;background:#233149;border:1px solid #2c3d5b;
+               display:flex;align-items:center;justify-content:center;
+               font-family:var(--mono);font-size:7px;color:var(--muted);transition:.35s}
+  .ana-p.g.active .th{background:var(--work-dim);border-color:var(--work);color:var(--work)}
+  .ana-p.o.active .th{background:var(--oh-dim);border-color:var(--oh);color:var(--oh)}
+  .fan{height:14px;position:relative;margin:2px 0}
+  .fan::before{content:"";position:absolute;left:8%;right:8%;top:50%;height:1px;
+               background:linear-gradient(90deg,transparent,var(--faint));opacity:.6}
+  .cells{display:flex;gap:2px;min-width:0}
+  .cells .c{flex:1;min-width:0;height:16px;border-radius:3px;background:#182234;transition:background .35s,box-shadow .35s}
+  .cells.one .c{background:var(--work);box-shadow:0 0 7px rgba(63,185,80,.5)}
+  .cells.scattered{display:grid;grid-template-columns:repeat(8,1fr);gap:2px}
+  .cells.scattered .c{background:var(--oh-dim)}
+  .cells.scattered .c.hit{background:var(--oh);box-shadow:0 0 7px rgba(255,144,64,.5)}
+  .brk{display:flex;margin-top:10px;min-width:0}
+  .brk .seg{flex:1;min-width:0;border-top:2px solid var(--work);padding:4px 2px 0;font-family:var(--mono);
+            font-size:9.5px;color:var(--work);text-align:center;overflow-wrap:break-word}
+  .brk .seg.o{border-color:var(--oh);color:var(--oh)}
+  .ana-stats{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+  .astat{border:1px solid var(--border);border-radius:12px;padding:12px 16px;background:var(--panel2);
+         border-left:3px solid var(--faint);transition:border-color .3s}
+  .astat.g{border-left-color:var(--work)} .astat.o{border-left-color:var(--oh)}
+  .astat b{font-family:var(--mono);font-size:19px;display:block}
+  .astat.g b{color:var(--work)} .astat.o b{color:var(--oh)}
+  .astat span{color:var(--muted);font-size:12px}
+
+  pre.code{background:#080d15;border:1px solid var(--border);border-radius:12px;padding:16px 18px;
+           overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.6;margin:18px 0 0}
+  pre.code .k{color:#c586c0} pre.code .f{color:#dcdcaa} pre.code .s{color:#ce9178}
+  pre.code .c{color:#5a7a4a;font-style:italic} pre.code .n{color:#b5cea8}
+  .code-hint{color:var(--faint);font-size:12px;margin:8px 2px 0}
+
+  /* ---------- 2. explorer ---------- */
+  .exp{display:grid;grid-template-columns:1fr;gap:18px}
+  .presets{display:flex;gap:8px;flex-wrap:wrap}
+  .preset{background:var(--panel2);border:1px solid var(--border);color:var(--muted);border-radius:999px;
+          padding:5px 14px;font-size:12.5px;cursor:pointer;font-family:var(--mono);transition:.2s}
+  .preset:hover{color:var(--text);border-color:var(--accent)}
+  .preset.on{color:#08111e;background:var(--accent);border-color:var(--accent);font-weight:700}
+  .ctl label{display:block;font-size:13px;color:var(--muted);margin:14px 0 4px}
+  .ctl .val{float:right;font-family:var(--mono);color:var(--text)}
+  input[type=range]{width:100%;accent-color:var(--oh);height:26px}
+  .sgrid{display:grid;grid-template-columns:repeat(16,1fr);gap:4px;margin:4px 0 2px}
+  .sector{display:flex;gap:1px;padding:1px;border:1px solid #1a2436;border-radius:4px;transition:border-color .2s,background .2s}
+  .sector.fetch{border-color:rgba(255,144,64,.7);background:rgba(255,144,64,.07);box-shadow:0 0 6px rgba(255,144,64,.25)}
+  .cell{flex:1;height:14px;border-radius:2px;background:#141d2c;transition:background .15s}
+  .cell.waste{background:rgba(255,144,64,.30)}
+  .cell.use{background:var(--work);box-shadow:0 0 5px rgba(63,185,80,.55)}
+  .axle{display:flex;justify-content:space-between;color:var(--faint);font-family:var(--mono);
+        font-size:10.5px;margin-bottom:14px}
+  .estats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:16px}
+  .estat{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:12px 14px;border-top:3px solid var(--faint);min-width:0}
+  .estat b{font-family:var(--mono);font-size:22px;font-weight:600;display:block;line-height:1.2}
+  .estat span{color:var(--muted);font-size:11.5px;line-height:1.4;display:block;margin-top:3px}
+  .estat.good b{color:var(--work)} .estat.bad b{color:var(--oh)}
+  .verdict{margin-top:14px;padding:12px 16px;border-radius:10px;background:var(--panel2);
+           border-left:3px solid var(--faint);font-size:14px}
+  .verdict.v1{border-color:var(--work);color:#7ee2a0}
+  .verdict.v2{border-color:#d29922;color:#e3b341}
+  .verdict.v3{border-color:var(--oh);color:#ffb066}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;font-size:12.5px;color:var(--muted)}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+
+  .meas{margin-top:26px}
+  .meas h3{font-size:15px;margin:0 0 4px}
+  .cmp{display:grid;grid-template-columns:150px 1fr;gap:14px;align-items:center;margin-top:12px}
+  .cmp .lbl{color:var(--muted);font-size:12.5px;text-align:right}
+  .cmp .lbl b{display:block;font-family:var(--mono);color:var(--text);font-size:14px}
+  .tbar{height:38px;border-radius:10px;overflow:hidden;display:flex;border:1px solid var(--border);
+        background:var(--panel2);position:relative}
+  .tbar .fill{height:100%;display:flex;align-items:center;justify-content:flex-end;padding-right:10px;
+              font-family:var(--mono);font-weight:700;font-size:12.5px;color:#0a0e14;white-space:nowrap;
+              width:0;transition:width 1.2s cubic-bezier(.2,.7,.3,1)}
+  .tbar .fill.good{background:var(--work)}
+  .tbar .fill.bad{background:repeating-linear-gradient(45deg,var(--oh),var(--oh) 7px,#e0762b 7px,#e0762b 14px)}
+  .ticks{display:flex;justify-content:space-between;color:var(--faint);font-family:var(--mono);font-size:11px;margin-top:5px}
+
+  /* ---------- 3. matrix ---------- */
+  .mx-wrap{display:grid;grid-template-columns:auto 1fr;gap:34px;align-items:start}
+  .mx-btns{display:flex;gap:8px;margin-bottom:16px}
+  .btn{background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:9px;
+       padding:8px 16px;font-size:13.5px;cursor:pointer;transition:.2s;font-family:inherit}
+  .btn:hover{border-color:var(--accent)}
+  .btn.on.g{background:var(--work);border-color:var(--work);color:#08111e;font-weight:700}
+  .btn.on.o{background:var(--oh);border-color:var(--oh);color:#08111e;font-weight:700}
+  .mx{display:grid;grid-template-columns:repeat(8,1fr);gap:5px;max-width:330px}
+  .mx .hd{display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:10px;color:var(--faint)}
+  .mx .mc{aspect-ratio:1;display:flex;align-items:center;justify-content:center;background:var(--panel2);
+          border:1px solid var(--border);border-radius:6px;font-family:var(--mono);font-size:11px;color:var(--muted);
+          transition:background .18s,color .18s,border-color .18s,box-shadow .18s}
+  .mx .mc.rw{background:var(--work-dim);border-color:var(--work);color:var(--work);box-shadow:0 0 8px rgba(63,185,80,.35)}
+  .mx .mc.cl{background:var(--oh-dim);border-color:var(--oh);color:var(--oh);box-shadow:0 0 8px rgba(255,144,64,.35)}
+  .mread{margin-top:14px;font-size:13.5px;color:var(--muted);max-width:330px}
+  .mread b{font-family:var(--mono)}
+  .mmap .cap{color:var(--muted);font-size:12.5px;margin-bottom:10px}
+  .mrow{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+  .mrow .mlab{font-family:var(--mono);font-size:10.5px;color:var(--faint);width:64px;text-align:right;flex:none}
+  .mrow .cells{flex:1}
+  .mrow .cells .c{height:18px}
+  .mrow .cells .c.use{background:var(--work);box-shadow:0 0 7px rgba(63,185,80,.5)}
+  .mrow .cells .c.hit{background:var(--oh);box-shadow:0 0 7px rgba(255,144,64,.5)}
+  .mrow .cells .c.waste{background:var(--oh-dim)}
+  .mrow .tx{font-family:var(--mono);font-size:10.5px;width:158px;flex:none;color:var(--faint)}
+  .mrow .tx.good{color:var(--work)}
+  .caveat{margin-top:20px;padding:14px 18px;border-radius:12px;background:rgba(210,153,34,.07);
+          border:1px solid rgba(210,153,34,.35);font-size:14px}
+  .caveat b{color:#e3b341}
+
+  /* ---------- 4. race ---------- */
+  .race-head{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:16px}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#08111e;font-weight:700}
+  .tread{margin-left:auto;font-family:var(--mono);color:var(--muted);font-size:14px}
+  .tread b{color:var(--text);display:inline-block;min-width:80px}
+  .lane-lbl{display:flex;justify-content:space-between;align-items:baseline;margin:16px 2px 6px;font-size:13px}
+  .lane-lbl .t{font-weight:700}
+  .lane-lbl .s{color:var(--muted);font-size:12px}
+  .lane-lbl .tps{font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .lane{position:relative;height:52px;background:var(--panel2);border:1px solid var(--border);
+        border-radius:10px;overflow:hidden}
+  .lane .fillp{position:absolute;top:0;bottom:0;left:0;width:0}
+  .lane.co .fillp{background:linear-gradient(90deg,rgba(63,185,80,.75),var(--work));
+                  box-shadow:0 0 18px rgba(63,185,80,.35)}
+  .lane.st .fillp{background:repeating-linear-gradient(90deg,rgba(255,144,64,.16) 0 9px,var(--oh) 9px 12px)}
+  .lane .cursor{position:absolute;top:0;bottom:0;width:2px;background:rgba(255,255,255,.55);left:0}
+  .flag{position:absolute;top:50%;right:8px;transform:translateY(-50%) scale(.4);opacity:0;
+        background:#0a0e14;border:2px solid var(--work);color:var(--work);border-radius:999px;
+        font-size:13px;line-height:1;padding:4px 9px;font-family:var(--mono)}
+  .flag.o{border-color:var(--oh);color:var(--oh)}
+  .flag.pop{animation:pop .5s cubic-bezier(.34,1.56,.64,1) forwards}
+  @keyframes pop{0%{transform:translateY(-50%) scale(.4);opacity:0}60%{opacity:1}100%{transform:translateY(-50%) scale(1);opacity:1}}
+  .lane-cap{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11.5px;
+            color:var(--faint);margin:4px 2px 0}
+  .counts{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:20px}
+  .count{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:14px 18px;
+         display:flex;align-items:center;gap:16px}
+  .count b{font-family:var(--mono);font-size:30px;font-weight:700;min-width:44px}
+  .count.g b{color:var(--work)} .count.o b{color:var(--oh)}
+  .count span{color:var(--muted);font-size:12.5px;line-height:1.45}
+  .race-sum{margin-top:18px;padding:14px 18px;border-radius:12px;background:var(--panel2);
+            border:1px solid var(--border);border-left:3px solid var(--work);font-size:14.5px}
+  .race-sum b{color:var(--work)}
+
+  /* ---------- 5. rules ---------- */
+  .strats{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+  .strat{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:18px;
+         display:flex;flex-direction:column;gap:10px;position:relative}
+  .strat h3{margin:0;font-size:15.5px}
+  .strat p{margin:0;color:var(--muted);font-size:13px;line-height:1.55;flex:1}
+  .strat .mini{display:flex;align-items:center;gap:5px;flex-wrap:wrap;font-family:var(--mono);font-size:10.5px}
+  .strat .m{background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:2px 6px;color:var(--muted)}
+  .strat .m.hi{border-color:var(--work);color:var(--work);background:var(--work-dim)}
+  .strat .m.bad{border-color:rgba(255,144,64,.5);color:var(--oh)}
+  .strat .arr{color:var(--faint)}
+  .strat.star{border-color:var(--nvidia);box-shadow:0 0 0 1px var(--nvidia),0 10px 34px -12px rgba(118,185,0,.35)}
+  .strat .badge{position:absolute;top:-11px;right:12px;background:var(--nvidia);color:#0a0e14;
+                font-size:10px;font-weight:800;letter-spacing:.06em;border-radius:999px;padding:3px 10px;text-transform:uppercase}
+
+  footer{padding:44px 0 60px;border-top:1px solid var(--border)}
+  .formula{font-family:var(--mono);font-size:15px;color:var(--muted);text-align:center;padding:8px 0 4px}
+  .formula b{color:var(--work)}
+  .fin{color:var(--faint);text-align:center;font-size:13px;margin-top:10px}
+
+  .reveal{opacity:0;transform:translateY(16px);transition:opacity .6s ease,transform .6s ease}
+  .reveal.in{opacity:1;transform:none}
+
+  @media(max-width:940px){
+    .ana{grid-template-columns:1fr}
+    .estats{grid-template-columns:1fr 1fr}
+    .mx-wrap{grid-template-columns:1fr}
+    .cmp{grid-template-columns:110px 1fr}
+  }
+  @media(max-width:560px){
+    .strats{grid-template-columns:1fr}
+    .counts{grid-template-columns:1fr}
+    .estats{grid-template-columns:1fr 1fr}
+    .ana-stats{grid-template-columns:1fr}
+    .threads .th{font-size:0}
+    .cmp{grid-template-columns:86px 1fr}
+    .mrow .tx{display:none}
+  }
+  @media(prefers-reduced-motion:reduce){
+    *{transition:none!important;animation:none!important;scroll-behavior:auto}
+  }
+</style>
+</head>
+<body>
+
+<nav class="top"><div class="wrap">
+  <a href="#anatomy">① What the hardware does</a>
+  <a href="#explorer">② Stride explorer</a>
+  <a href="#matrices">③ Where it hides</a>
+  <a href="#race">④ The bandwidth race</a>
+  <a href="#rules">⑤ Rules of thumb</a>
+</div></nav>
+
+<header><div class="wrap">
+  <div class="kicker">GPU Inference · Kernel Optimization</div>
+  <h1><span class="hl">Memory Coalescing</span>:<br>why adjacent threads must read adjacent addresses</h1>
+  <p class="sub">A warp is 32 threads that request memory <em>together</em>. The hardware folds those 32
+     requests into as few transactions as the addresses allow — one if they're contiguous, thirty-two
+     if they're scattered. Same 32 numbers, up to 32× the memory traffic. This one pattern is the
+     difference between 89% and 23% of peak bandwidth.</p>
+  <div class="chips">
+    <div class="chip c1"><b>1 vs 32</b><span>transactions for the same 32 floats — best vs worst case</span></div>
+    <div class="chip c2"><b>3.8×</b><span>bandwidth lost going from stride 1 to stride 2 (H100 SXM)</span></div>
+    <div class="chip c3"><b>89% → 23%</b><span>of peak HBM bandwidth · 2988 → 778 GB/s measured</span></div>
+  </div>
+</div></header>
+
+<!-- ============ 1. ANATOMY ============ -->
+<section id="anatomy"><div class="wrap reveal">
+  <div class="kicker">Section 1</div>
+  <h2><span class="n">01</span>One warp walks into a memory system</h2>
+  <p class="lead">GPUs don't move bytes one at a time — memory travels in fixed-size chunks
+     (32- and 128-byte transactions). When a warp reads, the hardware looks at all 32 addresses
+     and issues the <em>minimum number of transactions that covers them</em>. Contiguous addresses
+     collapse into one sweep. Scattered addresses can't be merged — every gap costs a transaction.</p>
+
+  <div class="panel">
+    <div class="ana">
+      <div class="ana-p g" id="anaA">
+        <div class="ana-t" style="color:var(--work)">Coalesced · stride 1</div>
+        <div class="ana-s">thread <span class="mono">i</span> reads address <span class="mono">i</span> — adjacent threads, adjacent floats</div>
+        <div class="threads"></div>
+        <div class="fan"></div>
+        <div class="cells one"></div>
+        <div class="brk"><div class="seg">one 128 B transaction — all 32 floats, one sweep</div></div>
+      </div>
+      <div class="ana-p o" id="anaB">
+        <div class="ana-t" style="color:var(--oh)">Strided · stride 32</div>
+        <div class="ana-s">thread <span class="mono">i</span> reads address <span class="mono">i × 32</span> — adjacent threads, far-apart floats</div>
+        <div class="threads"></div>
+        <div class="fan"></div>
+        <div class="cells scattered"></div>
+        <div class="brk" id="brkB"></div>
+      </div>
+    </div>
+    <div class="ana-stats">
+      <div class="astat" id="astatA"><b>1 transaction</b><span>128 B on the wire · every byte used · warp served in one sweep</span></div>
+      <div class="astat" id="astatB"><b>32 transactions</b><span>1024 B on the wire · only 128 B used · 12.5% utilization</span></div>
+    </div>
+    <p class="note">Each small block below the threads is one 32-byte sector (8 floats). Orange = fetched
+       but thrown away. The hardware can't skip it: memory moves in whole chunks, whether you need the
+       bytes or not.</p>
+  </div>
+
+  <pre class="code"><span class="c">// Same copy, two access patterns — the only difference is the multiply</span>
+<span class="k">__global__</span> <span class="k">void</span> <span class="f">coalesced</span>(<span class="k">float</span>* data, <span class="k">float</span>* out, <span class="k">int</span> n) {
+    <span class="k">int</span> idx = blockIdx.x * blockDim.x + threadIdx.x;
+    <span class="k">if</span> (idx &lt; n) out[idx] = data[idx];            <span class="c">// thread i reads address i      → 1 transaction</span>
+}
+<span class="k">__global__</span> <span class="k">void</span> <span class="f">strided</span>(<span class="k">float</span>* data, <span class="k">float</span>* out, <span class="k">int</span> n, <span class="k">int</span> stride) {
+    <span class="k">int</span> idx = blockIdx.x * blockDim.x + threadIdx.x;
+    <span class="k">if</span> (idx &lt; n) out[idx] = data[idx * stride];   <span class="c">// thread i reads address i×stride → up to 32</span>
+}</pre>
+  <p class="code-hint">Run the strided version with stride = 2 on an H100 and bandwidth drops 3.8×. Nothing else changed.</p>
+</div></section>
+
+<!-- ============ 2. EXPLORER ============ -->
+<section id="explorer"><div class="wrap reveal">
+  <div class="kicker">Section 2 · Interactive</div>
+  <h2><span class="n">02</span>Stride explorer: watch the transactions multiply</h2>
+  <p class="lead">One warp wants 32 floats (128 bytes). Drag the stride and watch what the memory
+     system actually has to fetch. Green = a float your warp asked for. Orange = bytes hauled in
+     anyway and thrown away.</p>
+
+  <div class="panel exp">
+    <div>
+      <div class="presets" id="stridePresets">
+        <button class="preset" data-s="1">stride 1 · coalesced</button>
+        <button class="preset" data-s="2">stride 2</button>
+        <button class="preset" data-s="4">stride 4</button>
+        <button class="preset" data-s="8">stride 8</button>
+        <button class="preset" data-s="16">stride 16</button>
+        <button class="preset" data-s="32">stride 32 · worst</button>
+      </div>
+      <div class="ctl">
+        <label>Stride — floats between consecutive threads <span class="val" id="sVal">1</span></label>
+        <input type="range" id="sRange" min="1" max="32" step="1" value="1">
+      </div>
+      <div class="sgrid" id="sgrid"></div>
+      <div class="axle"><span>byte 0</span><span>1 KB</span><span>2 KB</span><span>3 KB</span><span>4 KB of memory</span></div>
+      <div class="legend">
+        <span><i style="background:var(--work)"></i>requested float (4 B)</span>
+        <span><i style="background:rgba(255,144,64,.30)"></i>fetched anyway, discarded</span>
+        <span><i style="border:1px solid rgba(255,144,64,.7);background:transparent"></i>one 32 B sector moved</span>
+      </div>
+    </div>
+    <div>
+      <div class="estats">
+        <div class="estat" id="eSec"><b>4</b><span>32 B sectors fetched per warp</span></div>
+        <div class="estat" id="eTx"><b>1</b><span>memory transactions issued</span></div>
+        <div class="estat" id="eWire"><b>128 B</b><span>on the wire, per 128 useful bytes</span></div>
+        <div class="estat" id="eUtil"><b>100%</b><span>of fetched bytes actually used</span></div>
+      </div>
+      <div class="verdict v1" id="eVerdict">Perfect coalescing — the whole warp rides in one 128-byte transaction.</div>
+    </div>
+  </div>
+
+  <div class="panel meas">
+    <h3>Measured on H100 SXM — same kernel, only the stride changes</h3>
+    <div class="cmp">
+      <div class="lbl"><b>2988 GB/s</b>coalesced (stride 1)</div>
+      <div><div class="tbar"><div class="fill good" data-w="89">89% of peak</div></div>
+        <div class="ticks"><span>0</span><span>peak = 3350 GB/s</span></div></div>
+    </div>
+    <div class="cmp">
+      <div class="lbl"><b>778 GB/s</b>stride 2</div>
+      <div><div class="tbar"><div class="fill bad" data-w="23">23% of peak</div></div>
+        <div class="ticks"><span>0</span><span>3.8× slower — for reading every other float</span></div></div>
+    </div>
+    <p class="note">Larger strides decay further: at stride ≥ 8 every thread lands in its own sector,
+       capping useful bandwidth near 12.5% of peak before the memory system's other inefficiencies
+       pile on. The transaction math above is exact; the wall-clock cost is even worse.</p>
+  </div>
+</div></section>
+
+<!-- ============ 3. MATRICES ============ -->
+<section id="matrices"><div class="wrap reveal">
+  <div class="kicker">Section 3</div>
+  <h2><span class="n">03</span>Where strided access hides: row-major matrices</h2>
+  <p class="lead">Nobody writes <code>data[idx * 32]</code> on purpose. Strided access sneaks in through
+     <em>data layout</em>. A row-major matrix stores rows back-to-back in memory — so reading along a
+     row is coalesced, and reading down a column is strided. Same matrix, same amount of data,
+     wildly different traffic.</p>
+
+  <div class="panel">
+    <div class="mx-btns">
+      <button class="btn on g" id="btnRow">→ read row 2 (8 threads)</button>
+      <button class="btn" id="btnCol">↓ read column 2 (8 threads)</button>
+    </div>
+    <div class="mx-wrap">
+      <div>
+        <div class="mx" id="mx"></div>
+        <div class="mread" id="mxRead">Thread <b>k</b> reads <b>A[2, k]</b> — addresses 16…23, consecutive.
+          <b style="color:var(--work)">1 transaction.</b></div>
+      </div>
+      <div class="mmap">
+        <div class="cap">The same matrix as it lives in memory (row-major) — each row below is one 32-byte sector:</div>
+        <div id="mmapRows"></div>
+      </div>
+    </div>
+    <div class="caveat"><b>⚠ The transpose trap:</b> a naive matrix transpose reads columns and writes rows.
+       Half of its traffic is strided no matter how you write it. The classic fix — staging tiles through
+       shared memory so <em>both</em> directions coalesce — is exactly the trick the next section builds up to.</div>
+    <p class="note">Example uses 8 threads and an 8-wide matrix so every matrix row is exactly one 32-byte
+       sector. Real kernels do this with 32-thread warps and 128-byte transactions — the geometry is identical.</p>
+  </div>
+</div></section>
+
+<!-- ============ 4. RACE ============ -->
+<section id="race"><div class="wrap reveal">
+  <div class="kicker">Section 4 · Animation</div>
+  <h2><span class="n">04</span>The bandwidth race: stride 1 vs stride 2</h2>
+  <p class="lead">Two kernels copy the same 1 GB buffer. One reads coalesced, one reads every second
+     float. Measured speeds on an H100 SXM: <b class="mono" style="color:var(--work)">2988 GB/s</b> vs
+     <b class="mono" style="color:var(--oh)">778 GB/s</b>. Watch the copies — and the wire — and count
+     the finishes.</p>
+
+  <div class="panel">
+    <div class="race-head">
+      <button class="btn primary" id="raceBtn">⏸ Pause</button>
+      <button class="btn" id="raceReset">↺ Restart</button>
+      <div class="tread">elapsed <b id="tRead">0.00 ms</b></div>
+    </div>
+
+    <div class="lane-lbl"><span class="t" style="color:var(--work)">Coalesced copy · stride 1</span>
+      <span class="s">1 transaction per warp — the wire carries only useful bytes</span>
+      <span class="tps">2988 GB/s</span></div>
+    <div class="lane co" id="laneCo"><div class="fillp"></div><div class="cursor"></div><div class="flag" id="flagCo">✓ copied</div></div>
+    <div class="lane-cap"><span id="coUseful">useful moved: 0.00 GB</span><span id="coWire">wire traffic: 0.00 GB</span></div>
+
+    <div class="lane-lbl"><span class="t" style="color:var(--oh)">Strided copy · stride 2</span>
+      <span class="s">2 transactions per warp — half the wire is discarded bytes</span>
+      <span class="tps">778 GB/s</span></div>
+    <div class="lane st" id="laneSt"><div class="fillp"></div><div class="cursor"></div><div class="flag o" id="flagSt">✓ copied</div></div>
+    <div class="lane-cap"><span id="stUseful">useful moved: 0.00 GB</span><span id="stWire">wire traffic: 0.00 GB — 2× the bytes, 3.8× slower</span></div>
+
+    <div class="counts">
+      <div class="count g"><b id="cntCo">0</b><span><b style="font-size:13px;color:var(--text)">copies finished · coalesced</b><br>0.34 ms per GB — 100% useful wire traffic</span></div>
+      <div class="count o"><b id="cntSt">0</b><span><b style="font-size:13px;color:var(--text)">copies finished · strided</b><br>1.29 ms per GB — and 2 GB on the wire each time</span></div>
+    </div>
+
+    <div class="race-sum">Each lane width = one full copy of the same buffer. Same data, same GPU, same kernel —
+      the only difference is the address pattern, and it's worth <b>~3.8× of your bandwidth</b>.</div>
+    <p class="note">Lane widths show per-copy progress. Bright orange stripes on the strided lane are the
+       useful bytes; the pale orange between them is fetched-and-discarded. Slow-motion ~3400×; measured
+       H100 SXM numbers from the chapter.</p>
+  </div>
+</div></section>
+
+<!-- ============ 5. RULES ============ -->
+<section id="rules"><div class="wrap reveal">
+  <div class="kicker">Section 5</div>
+  <h2><span class="n">05</span>Four habits that keep memory coalesced</h2>
+  <p class="lead">You rarely write raw strides. You inherit them — from layouts, transposes, and glue
+     code. These are the working rules.</p>
+
+  <div class="strats">
+    <div class="strat star">
+      <span class="badge">layout 101</span>
+      <h3>Keep the hot dimension contiguous</h3>
+      <p>Inference tensors are (batch, seq, hidden) with hidden last in memory. Kernels that sweep the
+         hidden dimension — per-token GEMVs, norms, activations — then read contiguously for free.
+         Batch-contiguous data makes batched ops coalesce too. PyTorch's default layout is usually right.</p>
+      <div class="mini"><span class="m hi">[b][s][h] · h last</span><span class="arr">→</span><span class="m hi">coalesced reads</span></div>
+    </div>
+    <div class="strat">
+      <h3>Distrust transposes and permutes</h3>
+      <p><code>.transpose()</code>/<code>.permute()</code> don't move data — they change the strides, so the
+         next kernel may read scattered. Check <code>.is_contiguous()</code>; if a hot kernel consumes a
+         non-contiguous view, one up-front <code>.contiguous()</code> copy usually pays for itself.</p>
+      <div class="mini"><span class="m bad">transposed view</span><span class="arr">→</span><span class="m hi">.contiguous() once</span><span class="arr">→</span><span class="m hi">fast kernel</span></div>
+    </div>
+    <div class="strat">
+      <h3>When a kernel is slow, check the pattern first</h3>
+      <p>Compute achieved bandwidth — bytes moved ÷ time — and compare to peak. Far below ~80%?
+         Suspect access patterns before anything else. Profilers (Nsight Compute, the nsys traces from
+         the last chapter) show sector counts and coalescing directly.</p>
+      <div class="mini"><span class="m">GB/s vs peak</span><span class="arr">&lt; 80%?</span><span class="m bad">look at strides</span></div>
+    </div>
+    <div class="strat">
+      <h3>Let Triton and cuBLAS do the bookkeeping</h3>
+      <p>Library GEMMs are coalescing-optimized to the last sector. In Triton, contiguous
+         <code>tl.load</code> block pointers get you coalescing automatically — you pick the layout,
+         the compiler handles the transaction packing. That's why it's the sweet spot for inference kernels.</p>
+      <div class="mini"><span class="m">friendly layout</span><span class="arr">+</span><span class="m">tl.load blocks</span><span class="arr">→</span><span class="m hi">coalesced, for free</span></div>
+    </div>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <div class="formula">utilization = <b>useful bytes</b> ÷ (32-byte sectors touched × 32 B)
+    &nbsp;→&nbsp; stride 2: 128 ÷ 256 = <b>50% of the wire wasted</b> — and measured bandwidth falls 3.8×</div>
+  <div class="fin">Memory Coalescing · part of the physics-llm-inference series · next: shared memory tiling &amp; tensor cores</div>
+</div></footer>
+
+<script>
+(function(){
+  "use strict";
+  var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var SECTOR_FLOATS = 8;                 // 32-byte sector / 4-byte float
+
+  function el(tag, cls, txt){
+    var e = document.createElement(tag);
+    if(cls) e.className = cls;
+    if(txt !== undefined) e.textContent = txt;
+    return e;
+  }
+
+  /* ---------- reveal on scroll ---------- */
+  var io = new IntersectionObserver(function(es){
+    es.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add("in"); io.unobserve(e.target);} });
+  },{threshold:.12});
+  document.querySelectorAll(".reveal").forEach(function(el2){ io.observe(el2); });
+
+  /* ---------- 1. anatomy: build + cycle ---------- */
+  var anaA = document.getElementById("anaA"), anaB = document.getElementById("anaB");
+  function buildThreads(container){
+    for(var i=0;i<32;i++) container.appendChild(el("div","th","T"+i));
+  }
+  buildThreads(anaA.querySelector(".threads"));
+  buildThreads(anaB.querySelector(".threads"));
+  var cellsOne = anaA.querySelector(".cells.one");
+  for(var i=0;i<32;i++) cellsOne.appendChild(el("div","c"));
+  var cellsScat = anaB.querySelector(".cells.scattered");
+  for(var j=0;j<64;j++) cellsScat.appendChild(el("div","c" + (j%SECTOR_FLOATS===0 ? " hit":"")));
+  var brkB = document.getElementById("brkB");
+  for(var s=0;s<8;s++) brkB.appendChild(el("div","seg o","32 B"));
+
+  var anaSides = [ {p:anaA, st:document.getElementById("astatA")},
+                   {p:anaB, st:document.getElementById("astatB")} ];
+  var ai = 0;
+  function anaTick(){
+    ai = (ai+1) % 2;
+    anaSides.forEach(function(side,i2){
+      side.p.classList.toggle("active", i2===ai);
+      side.st.classList.toggle("g", i2===0);
+      side.st.classList.toggle("o", i2===1);
+    });
+  }
+  if(reduceMotion){
+    anaSides.forEach(function(side,i2){ side.p.classList.add(i2===0?"g":"o","active"); side.st.classList.add(i2===0?"g":"o"); });
+  } else {
+    anaSides[0].p.classList.add("active"); anaSides[0].st.classList.add("g");
+    setInterval(anaTick, 2600);
+  }
+
+  /* ---------- 2. stride explorer ---------- */
+  var SECTORS = 128;                     // 128 sectors × 8 floats = 1024 floats = 4 KB
+  var sgrid = document.getElementById("sgrid");
+  var sectorEls = [], cellEls = [];
+  for(var s2=0;s2<SECTORS;s2++){
+    var sec = el("div","sector"); var row = [];
+    for(var c2=0;c2<SECTOR_FLOATS;c2++){ var cd = el("div","cell"); sec.appendChild(cd); row.push(cd); }
+    sgrid.appendChild(sec); sectorEls.push(sec); cellEls.push(row);
+  }
+  var sRange = document.getElementById("sRange"), sVal = document.getElementById("sVal"),
+      eSec = document.getElementById("eSec"), eTx = document.getElementById("eTx"),
+      eWire = document.getElementById("eWire"), eUtil = document.getElementById("eUtil"),
+      eVerdict = document.getElementById("eVerdict");
+
+  function updateExplorer(){
+    var stride = parseInt(sRange.value,10);
+    sVal.textContent = stride;
+    var touched = {}, requested = [];
+    for(var t=0;t<32;t++){
+      var addr = t*stride;              // float index
+      requested.push(addr);
+      touched[Math.floor(addr/SECTOR_FLOATS)] = true;
+    }
+    var secIdxs = Object.keys(touched).map(Number).sort(function(a,b){return a-b;});
+    // reset only cells we may have touched last time (full reset is fine at 1024 nodes)
+    for(var s3=0;s3<SECTORS;s3++){
+      if(!sectorEls[s3].classList.contains("fetch")) continue;
+      sectorEls[s3].classList.remove("fetch");
+      var row2 = cellEls[s3];
+      for(var c3=0;c3<SECTOR_FLOATS;c3++) row2[c3].className = "cell";
+    }
+    secIdxs.forEach(function(si){
+      sectorEls[si].classList.add("fetch");
+      var row2 = cellEls[si];
+      for(var c=0;c<SECTOR_FLOATS;c++) if(row2[c].className === "cell") row2[c].className = "cell waste";
+    });
+    requested.forEach(function(addr){
+      cellEls[Math.floor(addr/SECTOR_FLOATS)][addr%SECTOR_FLOATS].className = "cell use";
+    });
+
+    var nSec = secIdxs.length, wire = nSec*32, util = 128/wire*100;
+    var utilTxt = (util % 1 === 0) ? util + "%" : util.toFixed(1) + "%";
+    // transactions: contiguous runs of touched sectors merge; each 128 B transaction covers 4 sectors
+    var tx = 0, run = 0;
+    for(var k=0;k<secIdxs.length;k++){
+      if(k>0 && secIdxs[k]===secIdxs[k-1]+1) run++; else { tx += Math.ceil(run/4)||0; run = 1; }
+    }
+    tx += Math.ceil(run/4);
+
+    eSec.firstChild.textContent = nSec;
+    eTx.firstChild.textContent = tx;
+    eWire.firstChild.textContent = wire + " B";
+    eUtil.firstChild.textContent = utilTxt;
+    eUtil.className = "estat " + (util>=99 ? "good" : (util<=25.0001 ? "bad" : ""));
+
+    var cls, msg;
+    if(stride===1){ cls="v1"; msg="Perfect coalescing — the whole warp rides in one 128-byte transaction. This is the pattern cuBLAS is built on."; }
+    else if(stride===2){ cls="v3"; msg="Half the wire is waste — and measured bandwidth falls 3.8×, because scattered sectors drain the memory system beyond the raw byte count."; }
+    else if(stride<8){ cls="v3"; msg="Each sector now delivers just "+Math.max(1,Math.floor(8/stride))+" of your 32 floats. You're paying for "+nSec+" sectors to move 128 useful bytes."; }
+    else { cls="v3"; msg="Worst case — every thread lands in its own sector. 32 transactions, "+wire+" B on the wire, "+util+"% of it used."; }
+    eVerdict.className = "verdict " + cls;
+    eVerdict.textContent = msg;
+
+    document.querySelectorAll("#stridePresets .preset").forEach(function(b){
+      b.classList.toggle("on", parseInt(b.dataset.s,10)===stride);
+    });
+  }
+  sRange.addEventListener("input", updateExplorer);
+  document.querySelectorAll("#stridePresets .preset").forEach(function(b){
+    b.addEventListener("click", function(){ sRange.value = b.dataset.s; updateExplorer(); });
+  });
+  updateExplorer();
+
+  /* measured bars animate on reveal */
+  var measFilled = false;
+  function fillBars(){
+    if(measFilled) return; measFilled = true;
+    document.querySelectorAll(".tbar .fill").forEach(function(f){ f.style.width = f.dataset.w + "%"; });
+  }
+  if(reduceMotion){ fillBars(); }
+  else{
+    var io2 = new IntersectionObserver(function(es){
+      es.forEach(function(e){ if(e.isIntersecting){ setTimeout(fillBars,250); io2.disconnect(); } });
+    },{threshold:.4});
+    io2.observe(document.querySelector(".meas"));
+  }
+
+  /* ---------- 3. matrix ---------- */
+  var N = 8, mxCells = [], mapRows = [];
+  var mx = document.getElementById("mx"), mmapRows = document.getElementById("mmapRows");
+  var btnRow = document.getElementById("btnRow"), btnCol = document.getElementById("btnCol"),
+      mxRead = document.getElementById("mxRead");
+  var STAGGER = 26;
+
+  for(var r=0;r<N;r++){
+    for(var c=0;c<N;c++){
+      var mc = el("div","mc", String(r*N+c));   // cell shows its linear (float) address
+      mx.appendChild(mc); mxCells.push(mc);
+    }
+  }
+  for(var r2=0;r2<N;r2++){
+    var wrap = el("div","mrow");
+    wrap.appendChild(el("div","mlab","sector "+r2+" · "+(r2*32)+" B"));
+    var cellsRow = el("div","cells");
+    var row3 = [];
+    for(var c4=0;c4<N;c4++){ var cd2 = el("div","c"); cellsRow.appendChild(cd2); row3.push(cd2); }
+    wrap.appendChild(cellsRow);
+    wrap.appendChild(el("div","tx",""));
+    mmapRows.appendChild(wrap);
+    mapRows.push(row3);
+  }
+
+  var mode = "row", staggerTimers = [];
+  function clearStagger(){ staggerTimers.forEach(clearTimeout); staggerTimers = []; }
+  function setMode(m){
+    mode = m; clearStagger();
+    btnRow.className = "btn" + (m==="row" ? " on g" : "");
+    btnCol.className = "btn" + (m==="col" ? " on o" : "");
+    mxCells.forEach(function(c5){ c5.className = "mc"; });
+    mapRows.forEach(function(row4){ row4.forEach(function(c6){ c6.className = "c"; }); });
+    document.querySelectorAll("#mmapRows .tx").forEach(function(t2){ t2.textContent = ""; });
+
+    var targets = [];
+    for(var k2=0;k2<N;k2++){
+      var addr = (m==="row") ? 2*N+k2 : k2*N+2;
+      targets.push(addr);
+      mxCells[addr].className = "mc " + (m==="row" ? "rw" : "cl");
+    }
+    var sectorsHit = {};
+    targets.forEach(function(addr,i3){
+      var si = Math.floor(addr/SECTOR_FLOATS);
+      sectorsHit[si] = true;
+      var fire = function(){
+        mapRows[si][addr%SECTOR_FLOATS].className = "c " + (m==="row" ? "use" : "hit");
+      };
+      if(reduceMotion) fire();
+      else staggerTimers.push(setTimeout(fire, i3*STAGGER));
+    });
+    var rows = Object.keys(sectorsHit).length;
+    if(m==="row"){
+      mxRead.innerHTML = "Thread <b>k</b> reads <b>A[2, k]</b> — addresses 16…23, consecutive. "+
+        "<b style='color:var(--work)'>1 transaction, 32 B, every byte used.</b>";
+      var tx2 = document.querySelector("#mmapRows .mrow:nth-child(3) .tx");
+      tx2.textContent = "→ 1 transaction ✓";
+      tx2.className = "tx good";
+    } else {
+      mxRead.innerHTML = "Thread <b>k</b> reads <b>A[k, 2]</b> — addresses 2, 10, 18… stride 8. "+
+        "<b style='color:var(--oh)'>8 sectors fetched, 87.5% discarded.</b>";
+      document.querySelectorAll("#mmapRows .tx").forEach(function(t3){
+        t3.textContent = "→ own 32 B transaction";
+        t3.className = "tx";
+      });
+    }
+  }
+  btnRow.addEventListener("click", function(){ setMode("row"); });
+  btnCol.addEventListener("click", function(){ setMode("col"); });
+  setMode("row");
+
+  /* ---------- 4. race ---------- */
+  var COPY_GB = 1, CO_GBS = 2988, ST_GBS = 778;
+  var CO_MS = COPY_GB/CO_GBS*1000;      // ≈ 0.335 ms
+  var ST_MS = COPY_GB/ST_GBS*1000;      // ≈ 1.285 ms
+  var SPEED = reduceMotion ? Infinity : 3.4;   // real seconds per simulated ms
+  var laneCo = document.getElementById("laneCo"), laneSt = document.getElementById("laneSt"),
+      fillCo = laneCo.querySelector(".fillp"), fillSt = laneSt.querySelector(".fillp"),
+      curCo = laneCo.querySelector(".cursor"), curSt = laneSt.querySelector(".cursor"),
+      flagCo = document.getElementById("flagCo"), flagSt = document.getElementById("flagSt"),
+      cntCoEl = document.getElementById("cntCo"), cntStEl = document.getElementById("cntSt"),
+      tReadEl = document.getElementById("tRead"),
+      coUsefulEl = document.getElementById("coUseful"), coWireEl = document.getElementById("coWire"),
+      stUsefulEl = document.getElementById("stUseful"), stWireEl = document.getElementById("stWire"),
+      raceBtn = document.getElementById("raceBtn"), raceReset = document.getElementById("raceReset");
+
+  var raceOn = false, rafId = 0, lastNow = 0, simT = 0, lastCo = 0, lastSt = 0, everStarted = false;
+
+  function pop(flag){ flag.classList.remove("pop"); void flag.offsetWidth; flag.classList.add("pop"); }
+  function fmtGB(gb){ return gb.toFixed(2) + " GB"; }
+
+  function frame(now){
+    if(!raceOn) return;
+    simT += (now - lastNow)/1000/SPEED;               // simulated ms, accumulated across pauses
+    lastNow = now;
+    var t = simT;
+    var nCo = Math.floor(t/CO_MS), nSt = Math.floor(t/ST_MS);
+    if(nCo > lastCo) pop(flagCo);
+    if(nSt > lastSt) pop(flagSt);
+    lastCo = nCo; lastSt = nSt;
+    var fCo = (t%CO_MS)/CO_MS, fSt = (t%ST_MS)/ST_MS;
+    fillCo.style.width = (fCo*100)+"%"; curCo.style.left = (fCo*100)+"%";
+    fillSt.style.width = (fSt*100)+"%"; curSt.style.left = (fSt*100)+"%";
+    cntCoEl.textContent = nCo; cntStEl.textContent = nSt;
+    tReadEl.textContent = t.toFixed(2)+" ms";
+    var coGB = t*CO_GBS/1000, stGB = t*ST_GBS/1000;
+    coUsefulEl.textContent = "useful moved: "+fmtGB(coGB);
+    coWireEl.textContent   = "wire traffic: "+fmtGB(coGB);
+    stUsefulEl.textContent = "useful moved: "+fmtGB(stGB);
+    stWireEl.textContent   = "wire traffic: "+fmtGB(stGB*2)+" — 2× the bytes, 3.8× slower";
+    rafId = requestAnimationFrame(frame);
+  }
+  function startRace(){
+    if(raceOn) return; raceOn = true; everStarted = true;
+    raceBtn.textContent = "⏸ Pause";
+    lastNow = performance.now();
+    rafId = requestAnimationFrame(frame);
+  }
+  function pauseRace(){ raceOn = false; cancelAnimationFrame(rafId); raceBtn.textContent = "▶ Resume"; }
+  function resetRace(){
+    pauseRace();
+    simT = 0; lastCo = 0; lastSt = 0;
+    fillCo.style.width = "0%"; fillSt.style.width = "0%";
+    curCo.style.left = "0%"; curSt.style.left = "0%";
+    cntCoEl.textContent = "0"; cntStEl.textContent = "0";
+    tReadEl.textContent = "0.00 ms";
+    coUsefulEl.textContent = "useful moved: 0.00 GB"; coWireEl.textContent = "wire traffic: 0.00 GB";
+    stUsefulEl.textContent = "useful moved: 0.00 GB"; stWireEl.textContent = "wire traffic: 0.00 GB — 2× the bytes, 3.8× slower";
+    flagCo.classList.remove("pop"); flagSt.classList.remove("pop");
+  }
+  raceBtn.addEventListener("click", function(){ raceOn ? pauseRace() : startRace(); });
+  raceReset.addEventListener("click", function(){ resetRace(); setTimeout(startRace, 80); });
+
+  if(reduceMotion){
+    var T = 3*ST_MS;   // show a settled state
+    fillCo.style.width = "100%"; fillSt.style.width = "100%";
+    curCo.style.left = "100%"; curSt.style.left = "100%";
+    cntCoEl.textContent = Math.floor(T/CO_MS); cntStEl.textContent = Math.floor(T/ST_MS);
+    tReadEl.textContent = T.toFixed(2)+" ms";
+    coUsefulEl.textContent = "useful moved: "+fmtGB(T*CO_GBS/1000);
+    coWireEl.textContent = "wire traffic: "+fmtGB(T*CO_GBS/1000);
+    stUsefulEl.textContent = "useful moved: "+fmtGB(T*ST_GBS/1000);
+    stWireEl.textContent = "wire traffic: "+fmtGB(T*ST_GBS/1000*2)+" — 2× the bytes, 3.8× slower";
+    flagCo.classList.add("pop"); flagSt.classList.add("pop");
+    raceBtn.style.display = "none"; raceReset.style.display = "none";
+  } else {
+    var io3 = new IntersectionObserver(function(es){
+      es.forEach(function(e){ if(e.isIntersecting && !everStarted){ startRace(); io3.disconnect(); } });
+    },{threshold:.35});
+    io3.observe(laneCo);
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,860 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Profiling with ncu — Visual Explainer</title>
+<style>
+  :root{
+    --bg:#0a0e14; --panel:#101722; --panel2:#0c1220; --border:#1e2a3c;
+    --text:#dbe4ee; --muted:#7d8ca0; --faint:#4b5a6e;
+    --oh:#ff9040; --oh-dim:rgba(255,144,64,.16);
+    --work:#3fb950; --work-dim:rgba(63,185,80,.15);
+    --warn:#d29922;
+    --accent:#58a6ff; --nvidia:#76b900;
+    --mono:"Cascadia Code","JetBrains Mono",Consolas,ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:16px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+       -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 22px}
+  code,.mono{font-family:var(--mono)}
+  a{color:var(--accent)}
+
+  /* ---------- header ---------- */
+  header{padding:64px 0 40px;position:relative;overflow:hidden}
+  header::before{content:"";position:absolute;inset:0;
+    background:
+      radial-gradient(600px 300px at 15% 0%,rgba(88,166,255,.09),transparent 60%),
+      radial-gradient(700px 340px at 85% 10%,rgba(118,185,0,.08),transparent 60%);}
+  header .wrap{position:relative}
+  .kicker{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.16em;text-transform:uppercase}
+  h1{font-size:clamp(28px,5vw,44px);line-height:1.15;margin:10px 0 12px;letter-spacing:-.01em}
+  h1 .hl{color:var(--work)}
+  .sub{color:var(--muted);max-width:780px;font-size:17px}
+  .chips{display:flex;gap:12px;flex-wrap:wrap;margin-top:26px}
+  .chip{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:12px 18px;min-width:150px}
+  .chip b{display:block;font-family:var(--mono);font-size:22px;font-weight:600}
+  .chip span{color:var(--muted);font-size:12.5px}
+  .chip.c1 b{color:var(--accent)} .chip.c2 b{color:var(--nvidia)} .chip.c3 b{color:var(--oh)}
+
+  nav.top{position:sticky;top:0;z-index:50;background:rgba(10,14,20,.88);backdrop-filter:blur(8px);
+          border-bottom:1px solid var(--border)}
+  nav.top .wrap{display:flex;gap:22px;padding:10px 22px;overflow-x:auto}
+  nav.top a{color:var(--muted);text-decoration:none;font-size:13.5px;white-space:nowrap;padding:4px 0}
+  nav.top a:hover{color:var(--text)}
+
+  section{padding:62px 0;border-top:1px solid var(--border)}
+  h2{font-size:26px;margin:6px 0 8px;letter-spacing:-.01em}
+  h2 .n{color:var(--faint);font-family:var(--mono);font-size:18px;margin-right:10px}
+  .lead{color:var(--muted);max-width:800px;margin:0 0 28px}
+  .lead code{color:var(--text);background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:1px 6px;font-size:.85em}
+  .lead b{color:var(--text)}
+
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:22px}
+  .note{font-size:12.5px;color:var(--faint);margin-top:12px}
+  .note code{color:var(--muted)}
+
+  pre.code{background:#080d15;border:1px solid var(--border);border-radius:12px;padding:16px 18px;
+           overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.6;margin:18px 0 0}
+  pre.code .k{color:#c586c0} pre.code .f{color:#dcdcaa} pre.code .s{color:#ce9178}
+  pre.code .c{color:#5a7a4a;font-style:italic} pre.code .n{color:#b5cea8}
+  pre.code .p{color:#4b5a6e}
+  .code-hint{color:var(--faint);font-size:12px;margin:8px 2px 0}
+  .code-hint code{color:var(--muted)}
+
+  .btn{background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:9px;
+       padding:8px 16px;font-size:13.5px;cursor:pointer;transition:.2s;font-family:inherit}
+  .btn:hover{border-color:var(--accent)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#08111e;font-weight:700}
+  .preset{background:var(--panel2);border:1px solid var(--border);color:var(--muted);border-radius:999px;
+          padding:5px 14px;font-size:12.5px;cursor:pointer;font-family:var(--mono);transition:.2s}
+  .preset:hover{color:var(--text);border-color:var(--accent)}
+  .preset.on{color:#08111e;background:var(--accent);border-color:var(--accent);font-weight:700}
+  .presets{display:flex;gap:8px;flex-wrap:wrap}
+  input[type=range]{width:100%;accent-color:var(--oh);height:26px}
+
+  .verdict{margin-top:14px;padding:12px 16px;border-radius:10px;background:var(--panel2);
+           border-left:3px solid var(--faint);font-size:14px}
+  .verdict.v1{border-color:var(--work);color:#7ee2a0}
+  .verdict.v2{border-color:var(--warn);color:#e3b341}
+  .verdict.v3{border-color:var(--oh);color:#ffb066}
+
+  /* ---------- 1. microscope ---------- */
+  .zoom{display:grid;grid-template-columns:1.15fr .85fr;gap:14px;align-items:start}
+  .duo{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+  .duo .d{flex:1;min-width:200px;background:var(--panel2);border:1px solid var(--border);border-radius:12px;
+          padding:10px 14px;font-size:12.5px;color:var(--muted)}
+  .duo .d b{display:block;color:var(--text);font-size:13.5px}
+  .duo .d.m b{color:var(--accent)} .duo .d.n b{color:var(--nvidia)}
+  .tl-cap{display:flex;justify-content:space-between;align-items:baseline;font-size:13px;margin-bottom:8px}
+  .tl-cap .t{font-weight:700}
+  .tl-cap .s{color:var(--muted);font-size:12px}
+  .tl-lane{position:relative;height:66px;background:var(--panel2);border:1px solid var(--border);
+           border-radius:10px;overflow:hidden}
+  .tl-bar{position:absolute;top:12px;bottom:12px;border-radius:6px;background:rgba(88,166,255,.20);
+          border:1px solid rgba(88,166,255,.45);cursor:pointer;padding:0;transition:background .25s,box-shadow .25s,border-color .25s}
+  .tl-bar:hover{background:rgba(88,166,255,.32)}
+  .tl-bar.on{background:var(--accent);border-color:var(--accent);box-shadow:0 0 14px rgba(88,166,255,.55)}
+  .tl-bar span{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+               font-family:var(--mono);font-size:10px;color:#cfe3ff;white-space:nowrap;
+               pointer-events:none;overflow:hidden;max-width:94%}
+  .tl-axis{display:flex;justify-content:space-between;color:var(--faint);font-family:var(--mono);
+           font-size:10.5px;margin:5px 2px 0}
+  .ncu-card{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:16px 18px 14px;
+            transition:border-color .3s,box-shadow .3s}
+  .ncu-card.live{border-color:rgba(88,166,255,.5);box-shadow:0 0 0 1px rgba(88,166,255,.35),0 10px 30px -12px rgba(88,166,255,.35)}
+  .ncu-kick{font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin-bottom:4px}
+  .ncu-k{font-family:var(--mono);font-size:16px;font-weight:700;margin-bottom:2px}
+  .ncu-meta{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-bottom:12px}
+  .nrow{display:grid;grid-template-columns:118px 1fr 52px;gap:10px;align-items:center;margin:7px 0;font-size:12px;color:var(--muted)}
+  .nrow b{font-family:var(--mono);font-size:12px;text-align:right;color:var(--text)}
+  .nbar{height:13px;background:#131c2b;border-radius:4px;overflow:hidden}
+  .nbar i{display:block;height:100%;border-radius:4px;width:0;background:var(--accent);opacity:.85;transition:width .6s cubic-bezier(.2,.7,.3,1)}
+  .nbar i.f-bad{background:var(--oh)} .nbar i.f-good{background:var(--work)}
+  .nbar i.f-warn{background:var(--warn)} .nbar i.f-dim{background:#3b4a61}
+
+  /* ---------- 2. metric explorer ---------- */
+  .mgrid{display:grid;grid-template-columns:295px 1fr;gap:16px;align-items:start}
+  .mcards{display:flex;flex-direction:column;gap:8px}
+  .mcard{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:12px 15px;
+         cursor:pointer;transition:border-color .25s,transform .25s,background .25s;text-align:left;color:var(--text);font-family:inherit;width:100%}
+  .mcard:hover{border-color:var(--accent)}
+  .mcard.on{border-color:var(--accent);background:#101c2e;transform:translateX(4px);
+            box-shadow:0 0 0 1px rgba(88,166,255,.35)}
+  .mcard b{display:flex;justify-content:space-between;align-items:baseline;font-size:13.5px}
+  .mcard .mv{font-family:var(--mono);font-size:12px;color:var(--faint)}
+  .mcard span{display:block;color:var(--muted);font-size:11.5px;margin-top:2px}
+  .mdetail{background:var(--panel2);border:1px solid var(--border);border-radius:14px;padding:20px 22px;min-height:420px}
+  .mdetail h3{margin:0 0 2px;font-size:18px}
+  .mdetail .def{color:var(--muted);font-size:13.5px;margin:8px 0 16px}
+  .mrow2{display:grid;grid-template-columns:86px 1fr 62px;gap:10px;align-items:center;margin:9px 0;font-size:12px;color:var(--muted)}
+  .mrow2 b{font-family:var(--mono);font-size:12.5px;text-align:right;color:var(--text)}
+  .mrow2 .nbar{height:18px}
+  .hs{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0}
+  .hcard{border:1px solid var(--border);border-radius:12px;padding:12px 14px;background:var(--panel);font-size:12.5px}
+  .hcard .hh{font-family:var(--mono);font-size:11px;letter-spacing:.06em;margin-bottom:5px}
+  .hcard.hi .hh{color:var(--work)} .hcard.lo .hh{color:var(--oh)}
+  .hcard p{margin:0;color:var(--muted);line-height:1.55}
+  .fixline{border-left:3px solid var(--accent);background:var(--panel);border-radius:0 10px 10px 0;
+           padding:10px 14px;font-size:13px;color:var(--text)}
+  .fixline b{color:var(--accent)}
+
+  /* ---------- 3. dashboard ---------- */
+  .dash{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .dk{background:var(--panel2);border:1px solid var(--border);border-radius:14px;padding:18px 18px 16px}
+  .dk.g{border-color:rgba(63,185,80,.4)} .dk.o{border-color:rgba(255,144,64,.4)}
+  .dk-h{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px}
+  .dk-h b{font-family:var(--mono);font-size:15px}
+  .dk.g .dk-h b{color:var(--work)} .dk.o .dk-h b{color:var(--oh)}
+  .dk-h span{font-family:var(--mono);font-size:12px;color:var(--faint)}
+  .dk-sub{color:var(--muted);font-size:11.5px;margin-bottom:14px}
+  .drow{display:grid;grid-template-columns:132px 1fr 58px;gap:10px;align-items:center;margin:10px 0;font-size:12px;color:var(--muted)}
+  .drow b{font-family:var(--mono);font-size:12.5px;text-align:right}
+  .dbar{height:22px;background:#131c2b;border-radius:6px;overflow:hidden}
+  .dbar i{display:block;height:100%;width:0;border-radius:6px;transition:width 1.1s cubic-bezier(.2,.7,.3,1)}
+  .dbar i.f-good{background:var(--work);box-shadow:0 0 10px rgba(63,185,80,.35)}
+  .dbar i.f-bad{background:repeating-linear-gradient(45deg,var(--oh),var(--oh) 7px,#e0762b 7px,#e0762b 14px)}
+  .dbar i.f-warn{background:var(--warn)}
+  .dbar i.f-dim{background:#3b4a61}
+  .drow b.f-good{color:var(--work)} .drow b.f-bad{color:var(--oh)}
+  .drow b.f-warn{color:#e3b341} .drow b.f-dim{color:var(--muted)}
+
+  /* ---------- 4. roofline ---------- */
+  .roof{display:grid;grid-template-columns:1.5fr 1fr;gap:18px;align-items:start}
+  .roof-svg-wrap{user-select:none}
+  #roofSvg{width:100%;height:auto;display:block;touch-action:none}
+  #roofSvg text{font-family:var(--mono)}
+  .readout{display:flex;flex-direction:column;gap:12px}
+  .rai{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:14px 16px}
+  .rai .lab{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+  .rai .big{font-family:var(--mono);font-size:34px;font-weight:700;line-height:1.15;color:var(--accent)}
+  .rai .unit{font-size:12.5px;color:var(--muted)}
+  .rc{display:inline-block;font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:.08em;
+      border-radius:999px;padding:5px 13px;border:1px solid var(--faint);color:var(--muted)}
+  .rc.mem{border-color:var(--oh);color:var(--oh);background:var(--oh-dim)}
+  .rc.comp{border-color:var(--work);color:var(--work);background:var(--work-dim)}
+  .rc.knee{border-color:var(--warn);color:#e3b341;background:rgba(210,153,34,.12)}
+  .rlines{font-size:13px;color:var(--muted)}
+  .rlines div{padding:7px 0;border-bottom:1px dashed var(--border);display:flex;justify-content:space-between;gap:10px}
+  .rlines div:last-child{border-bottom:none}
+  .rlines b{font-family:var(--mono);color:var(--text);font-weight:600;text-align:right}
+  .rx{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:13px 16px;
+      font-size:13px;line-height:1.6;color:var(--muted)}
+  .rx b{color:var(--text)}
+  .rx.mem{border-left:3px solid var(--oh)} .rx.comp{border-left:3px solid var(--work)} .rx.knee{border-left:3px solid var(--warn)}
+
+  /* ---------- 5. workflow ---------- */
+  .strats{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+  .strat{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:18px;
+         display:flex;flex-direction:column;gap:10px;position:relative}
+  .strat h3{margin:0;font-size:15.5px}
+  .strat p{margin:0;color:var(--muted);font-size:13px;line-height:1.55;flex:1}
+  .strat .mini{display:flex;align-items:center;gap:5px;flex-wrap:wrap;font-family:var(--mono);font-size:10.5px}
+  .strat .m{background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:2px 6px;color:var(--muted)}
+  .strat .m.hi{border-color:var(--work);color:var(--work);background:var(--work-dim)}
+  .strat .m.bad{border-color:rgba(255,144,64,.5);color:var(--oh)}
+  .strat .m.wr{border-color:rgba(210,153,34,.5);color:#e3b341}
+  .strat .arr{color:var(--faint)}
+  .strat.star{border-color:var(--nvidia);box-shadow:0 0 0 1px var(--nvidia),0 10px 34px -12px rgba(118,185,0,.35)}
+  .strat .badge{position:absolute;top:-11px;right:12px;background:var(--nvidia);color:#0a0e14;
+                font-size:10px;font-weight:800;letter-spacing:.06em;border-radius:999px;padding:3px 10px;text-transform:uppercase}
+
+  footer{padding:44px 0 60px;border-top:1px solid var(--border)}
+  .formula{font-family:var(--mono);font-size:15px;color:var(--muted);text-align:center;padding:8px 0 4px}
+  .formula b{color:var(--work)}
+  .fin{color:var(--faint);text-align:center;font-size:13px;margin-top:10px}
+
+  .reveal{opacity:0;transform:translateY(16px);transition:opacity .6s ease,transform .6s ease}
+  .reveal.in{opacity:1;transform:none}
+
+  @media(max-width:940px){
+    .zoom{grid-template-columns:1fr}
+    .mgrid{grid-template-columns:1fr}
+    .mcards{flex-direction:row;flex-wrap:wrap}
+    .mcard{width:auto;flex:1 1 44%}
+    .mdetail{min-height:0}
+    .dash{grid-template-columns:1fr}
+    .roof{grid-template-columns:1fr}
+    .hs{grid-template-columns:1fr}
+  }
+  @media(max-width:560px){
+    .strats{grid-template-columns:1fr}
+    .mcard{flex:1 1 100%}
+    .nrow{grid-template-columns:92px 1fr 48px}
+    .drow{grid-template-columns:98px 1fr 50px}
+    .mrow2{grid-template-columns:70px 1fr 54px}
+  }
+  @media(prefers-reduced-motion:reduce){
+    *{transition:none!important;animation:none!important;scroll-behavior:auto}
+  }
+</style>
+</head>
+<body>
+
+<nav class="top"><div class="wrap">
+  <a href="#microscope">① nsys vs ncu</a>
+  <a href="#metrics">② The five numbers</a>
+  <a href="#gemms">③ Two GEMMs</a>
+  <a href="#roofline">④ Roofline explorer</a>
+  <a href="#workflow">⑤ The loop</a>
+</div></nav>
+
+<header><div class="wrap">
+  <div class="kicker">GPU Inference · Kernel Optimization</div>
+  <h1><span class="hl">Profiling with ncu</span>:<br>why this kernel is slow — and what the numbers say to do</h1>
+  <p class="sub">nsys showed you <em>where</em> the time went. Nsight Compute (<code>ncu</code>) puts one kernel
+     under a microscope and answers <em>why</em>. Under hundreds of collected counters sit five numbers that
+     decide the diagnosis — compute&nbsp;%, memory&nbsp;%, occupancy, L2 hit rate, bank conflicts — and one
+     chart, the <b>roofline</b>, that turns them into a verdict: memory-bound, compute-bound, or latency-bound,
+     each with its own fix.</p>
+  <div class="chips">
+    <div class="chip c1"><b>5 metrics</b><span>that matter, out of the hundreds ncu collects per kernel</span></div>
+    <div class="chip c2"><b>295 F/B</b><span>the H100 ridge point — bytes to the left of it, math to the right</span></div>
+    <div class="chip c3"><b>12% → 89%</b><span>compute throughput, naive → tiled GEMM — same problem, 9× apart</span></div>
+  </div>
+</div></header>
+
+<!-- ============ 1. MICROSCOPE ============ -->
+<section id="microscope"><div class="wrap reveal">
+  <div class="kicker">Section 1 · The workflow</div>
+  <h2><span class="n">01</span>nsys finds the suspect. ncu runs the interrogation.</h2>
+  <p class="lead">The nsys timeline from the last chapter tells you a GEMM eats 38&nbsp;ms of every decode
+     step. It can't tell you <em>why</em>. <code>ncu</code> picks one kernel, replays it dozens of times to
+     sweep every hardware counter, and hands you the full report. Click a kernel in the trace to see the
+     report ncu produces — and the verdict the numbers force.</p>
+
+  <div class="panel">
+    <div class="duo">
+      <div class="d m"><b>nsys — the map</b>whole-program timeline · every kernel, launch, memcpy · finds <em>which</em> kernel to blame</div>
+      <div class="d n"><b>ncu — the microscope</b>one kernel at a time · hundreds of counters per launch · finds <em>why</em> it's slow</div>
+    </div>
+    <div class="zoom">
+      <div>
+        <div class="tl-cap"><span class="t" style="color:var(--accent)">nsys trace · one decode step</span>
+          <span class="s">click a kernel to interrogate it</span></div>
+        <div class="tl-lane" id="tlLane"></div>
+        <div class="tl-axis"><span>0 ms</span><span>16</span><span>32</span><span>48</span><span>64 ms</span></div>
+        <p class="note">Timings are illustrative; the per-kernel metrics are the chapter's measured numbers.</p>
+      </div>
+      <div class="ncu-card" id="ncuCard">
+        <div class="ncu-kick">ncu report · GPU Speed Of Light</div>
+        <div class="ncu-k" id="ncName">—</div>
+        <div class="ncu-meta" id="ncMeta">—</div>
+        <div id="ncRows"></div>
+        <div class="verdict" id="ncVerdict">—</div>
+      </div>
+    </div>
+  </div>
+
+  <pre class="code"><span class="c"># the whole-program timeline: WHERE did the time go  (last chapter)</span>
+<span class="p">$</span> nsys profile python script.py
+
+<span class="c"># the deep dive on one kernel: WHY is it slow          (this chapter)</span>
+<span class="p">$</span> ncu --set full -o profile python script.py
+<span class="p">$</span> ncu --kernel-name <span class="s">"regex:.*gemm.*"</span> -o profile python script.py</pre>
+  <p class="code-hint"><code>--set full</code> collects everything; the Speed-Of-Light section alone carries the five numbers
+     below. Because ncu replays each kernel dozens of times, profile a short, representative run — and reopen the
+     result anytime with <code>ncu-ui profile.ncu-rep</code>.</p>
+</div></section>
+
+<!-- ============ 2. METRICS ============ -->
+<section id="metrics"><div class="wrap reveal">
+  <div class="kicker">Section 2 · The dashboard</div>
+  <h2><span class="n">02</span>Five numbers decide the diagnosis</h2>
+  <p class="lead">ncu reports hundreds of metrics; almost every verdict comes from these five. Click each one
+     to see how to read it — and what a bad value tells you to do. The bar pair on every card is the chapter's
+     two kernels: <span class="mono" style="color:var(--oh)">naive GEMM</span> vs
+     <span class="mono" style="color:var(--work)">tiled GEMM</span>.</p>
+
+  <div class="mgrid">
+    <div class="mcards" id="mcards"></div>
+    <div class="mdetail" id="mdetail"></div>
+  </div>
+</div></section>
+
+<!-- ============ 3. TWO GEMMS ============ -->
+<section id="gemms"><div class="wrap reveal">
+  <div class="kicker">Section 3 · Case study</div>
+  <h2><span class="n">03</span>Two GEMMs, same problem, 9× apart</h2>
+  <p class="lead">Same matrix multiply, same GPU, same shapes. The naive version reads every input from HBM
+     over and over; the tiled version stages blocks through shared memory so each byte does many FLOPs.
+     The five numbers don't just say one is faster — they say <b>exactly what the naive one should do
+     next</b>.</p>
+
+  <div class="panel">
+    <div class="dash">
+      <div class="dk o">
+        <div class="dk-h"><b>gemm_naive</b><span>38.4 ms</span></div>
+        <div class="dk-sub">one global-memory load per FMA · every element re-fetched from HBM</div>
+        <div class="drow"><span>Compute (SM)</span><div class="dbar"><i class="f-dim" data-w="12.3"></i></div><b class="f-dim">12.3%</b></div>
+        <div class="drow"><span>Memory</span><div class="dbar"><i class="f-bad" data-w="91.7"></i></div><b class="f-bad">91.7%</b></div>
+        <div class="drow"><span>Occupancy</span><div class="dbar"><i class="f-dim" data-w="89"></i></div><b class="f-dim">0.89</b></div>
+        <div class="drow"><span>L2 hit rate</span><div class="dbar"><i class="f-warn" data-w="23.1"></i></div><b class="f-warn">23.1%</b></div>
+        <div class="drow"><span>Bank conflicts</span><div class="dbar"><i class="f-dim" data-w="0"></i></div><b class="f-dim">0</b></div>
+        <div class="verdict v3">Memory-bound: HBM is saturated at 92% while the math units idle at 12%.
+          The 23% L2 hit rate is the smoking gun — every element is read from HBM many times over.
+          This kernel needs tiling.</div>
+      </div>
+      <div class="dk g">
+        <div class="dk-h"><b>gemm_tiled</b><span>4.1 ms</span></div>
+        <div class="dk-sub">tiles staged through shared memory · each loaded byte feeds many FMAs</div>
+        <div class="drow"><span>Compute (SM)</span><div class="dbar"><i class="f-good" data-w="89.2"></i></div><b class="f-good">89.2%</b></div>
+        <div class="drow"><span>Memory</span><div class="dbar"><i class="f-dim" data-w="34.1"></i></div><b class="f-dim">34.1%</b></div>
+        <div class="drow"><span>Occupancy</span><div class="dbar"><i class="f-dim" data-w="71"></i></div><b class="f-dim">0.71</b></div>
+        <div class="drow"><span>L2 hit rate</span><div class="dbar"><i class="f-good" data-w="95.3"></i></div><b class="f-good">95.3%</b></div>
+        <div class="drow"><span>Bank conflicts</span><div class="dbar"><i class="f-dim" data-w="0"></i></div><b class="f-dim">0</b></div>
+        <div class="verdict v1">Compute-bound at 89% of peak, 95% L2 hits, zero bank conflicts — the tiling
+          is doing its job. Well-optimized: ship it, and profile again after the next change.</div>
+      </div>
+    </div>
+    <p class="note">Read the <b style="color:var(--text)">saturated</b> metric, not the starved one — the saturated
+       bar names the bound (naive: memory), the starved bar measures the waste (naive: 88% of the compute you paid for).
+       And note tiling <i>lowered</i> occupancy, 0.89 → 0.71, while going 9.4× faster: occupancy is a means of hiding
+       latency, not a score — it only explains slowness when throughput is low too.</p>
+  </div>
+</div></section>
+
+<!-- ============ 4. ROOFLINE ============ -->
+<section id="roofline"><div class="wrap reveal">
+  <div class="kicker">Section 4 · Interactive</div>
+  <h2><span class="n">04</span>The roofline: one chart that names your bottleneck</h2>
+  <p class="lead">X-axis: arithmetic intensity — FLOPs per byte of HBM traffic. Y-axis: performance. A kernel
+     can never rise above <b>min(bandwidth × intensity, peak FLOPS)</b>: a diagonal memory ceiling that climbs
+     with intensity, then a flat compute ceiling. Every kernel lives on or under this roof. Drag the dot —
+     the only thing you control is the intensity.</p>
+
+  <div class="panel">
+    <div class="presets" id="roofPresets" style="margin-bottom:12px">
+      <button class="preset" data-ai="0.5">decode GEMV · b=1</button>
+      <button class="preset" data-ai="16">decode · b=32</button>
+      <button class="preset" data-ai="40">naive GEMM</button>
+      <button class="preset" data-ai="773">tiled GEMM</button>
+      <button class="preset" data-ai="3000">cuBLAS-class GEMM</button>
+    </div>
+    <div class="roof">
+      <div class="roof-svg-wrap">
+        <svg id="roofSvg" viewBox="0 0 920 520" role="img" aria-label="Roofline chart: achievable TFLOPS vs arithmetic intensity"></svg>
+        <div class="ctl" style="margin-top:10px">
+          <label style="display:block;font-size:13px;color:var(--muted);margin-bottom:4px">
+            Arithmetic intensity <span class="mono" id="aiVal" style="float:right;color:var(--text)">40 F/B</span></label>
+          <input type="range" id="aiRange" min="0" max="500" step="1" value="260">
+        </div>
+        <p class="note">Anchor dots are measured kernels: naive GEMM holds 91.7% of its memory roof
+           (123 of 134 TF); tiled GEMM holds 89.2% of the fp16 peak (883 of 990 TF). Real kernels sit a few
+           percent under the line — the draggable dot shows the ideal. H100 SXM: 3.35 TB/s HBM3, 990 TFLOPS dense fp16.</p>
+      </div>
+      <div class="readout">
+        <div class="rai">
+          <div class="lab">Arithmetic intensity</div>
+          <div class="big" id="rAi">40</div>
+          <div class="unit">FLOPs per byte of HBM traffic</div>
+        </div>
+        <div><span class="rc mem" id="rChip">MEMORY-BOUND</span></div>
+        <div class="rlines">
+          <div><span>achievable at this intensity</span><b id="rTf">134 TF</b></div>
+          <div><span>share of fp16 peak</span><b id="rPct">13.5%</b></div>
+          <div><span>memory ceiling here · 3.35 TB/s × AI</span><b id="rMem">134 TF</b></div>
+          <div><span>compute ceiling · fixed</span><b>990 TF</b></div>
+          <div><span>HBM traffic per 137 GFLOP of math</span><b id="rBytes">3.4 GB</b></div>
+        </div>
+        <div class="rx mem" id="rFix">The memory system is the ceiling — even a perfect kernel can't beat
+          3.35 TB/s × your intensity. Stop tuning threads; raise reuse instead.</div>
+      </div>
+    </div>
+  </div>
+</div></section>
+
+<!-- ============ 5. WORKFLOW ============ -->
+<section id="workflow"><div class="wrap reveal">
+  <div class="kicker">Section 5</div>
+  <h2><span class="n">05</span>The optimization loop</h2>
+  <p class="lead">Profile → diagnose → fix → reprofile. The profiler is only half the tool; the other half is
+     changing <em>one thing</em> and re-profiling to prove it mattered.</p>
+
+  <div class="strats">
+    <div class="strat star">
+      <span class="badge">the loop</span>
+      <h3>One change per experiment — then reprofile</h3>
+      <p>Every fix gets a before/after ncu run and a before/after duration. Two changes at once and you can't
+         attribute the delta; a fix without a re-profile is a rumor. Keep the profile files —
+         <code>profile-before.ncu-rep</code>, <code>profile-after.ncu-rep</code> — the diff <em>is</em> the result.</p>
+      <div class="mini"><span class="m">profile</span><span class="arr">→</span><span class="m">diagnose</span><span class="arr">→</span><span class="m">fix one thing</span><span class="arr">→</span><span class="m hi">reprofile</span></div>
+    </div>
+    <div class="strat">
+      <h3>Memory-bound? Move fewer bytes, not faster bytes</h3>
+      <p>When Memory% is saturated, no schedule trick beats physics: the fix is raising intensity. Coalesce
+         first (last chapter), then tile through shared memory so each fetched byte feeds many FLOPs, then fuse
+         passes so intermediates stay on-chip. Watch L2 hit rate climb toward 90% as proof.</p>
+      <div class="mini"><span class="m bad">L2 23%</span><span class="arr">→</span><span class="m">tile + fuse</span><span class="arr">→</span><span class="m hi">L2 95% · 9× faster</span></div>
+    </div>
+    <div class="strat">
+      <h3>Both engines idle? It's latency, not throughput</h3>
+      <p>Compute% <i>and</i> Memory% low means nothing is saturated — warps are stalled. Check occupancy next:
+         low occupancy with low throughput is the register/shared-memory pressure signature. Shrink registers
+         per thread, launch more smaller blocks, or fuse the kernel into a neighbor to amortize the launch.</p>
+      <div class="mini"><span class="m wr">SM 9% · Mem 22% · occ 0.18</span><span class="arr">→</span><span class="m">raise occupancy / fuse</span></div>
+    </div>
+    <div class="strat">
+      <h3>Compute-bound above ~85%? You're near done</h3>
+      <p>Below 80% of peak while compute-bound, the suspect is the instruction mix: fp32 where tensor cores
+         could run fp16/bf16, un-fused multiply-adds, div/sin where a polynomial would do. Above ~85%, further
+         tuning buys single digits — spend the time on the next kernel, which is probably memory-bound.</p>
+      <div class="mini"><span class="m">compute-bound</span><span class="arr">&lt; 80%?</span><span class="m">instruction mix</span><span class="arr">·</span><span class="m hi">≥ 85% → done</span></div>
+    </div>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <div class="formula">achievable TFLOPS = min(<b>3.35 TB/s × intensity</b>, <b>990 TFLOPS</b>)
+    &nbsp;→&nbsp; naive GEMM: 3.35 × 40 = <b>134 TF ceiling</b> — no thread tuning beats it; only raising the intensity does</div>
+  <div class="fin">Profiling with ncu · part of the physics-llm-inference series · prev: nsys, the big picture · next: shared-memory tiling &amp; tensor cores</div>
+</div></footer>
+
+<script>
+(function(){
+  "use strict";
+  var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  function el(tag, cls, txt){
+    var e = document.createElement(tag);
+    if(cls) e.className = cls;
+    if(txt !== undefined) e.textContent = txt;
+    return e;
+  }
+
+  /* ---------- reveal on scroll ---------- */
+  var io = new IntersectionObserver(function(es){
+    es.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add("in"); io.unobserve(e.target); } });
+  },{threshold:.12});
+  document.querySelectorAll(".reveal").forEach(function(x){ io.observe(x); });
+
+  /* ============================================================
+     1. microscope — nsys trace -> ncu report
+     ============================================================ */
+  var MS_TOTAL = 64;
+  var KERNELS = [
+    { name:"elementwise_add", start:2, dur:6, durTxt:"1.9 ms", meta:"duration 1.9 ms · grid (131k, 1, 1) · 4 B/elem",
+      sm:6.1, mem:88.4, occ:0.92, l2:31.0, conf:0, vc:"v1",
+      verdict:"Memory-saturating by design. An elementwise op is pure streaming — 88% of HBM is as good as it gets and no tuning changes that. Memory-bound is a diagnosis, not a verdict: for this kernel, nothing to fix.", cls:"good" },
+    { name:"gemm_naive", start:12, dur:38.4, durTxt:"38.4 ms", meta:"duration 38.4 ms · grid (256, 128, 1) · the 38 ms nsys blamed",
+      sm:12.3, mem:91.7, occ:0.89, l2:23.1, conf:0, vc:"v3",
+      verdict:"Memory-bound: HBM saturated at 92% while compute idles at 12%. L2 hit rate 23% — every element is re-fetched from HBM. This kernel needs tiling.", cls:"bad" },
+    { name:"attention_softmax", start:53, dur:0.9, durTxt:"0.7 ms", meta:"duration 0.7 ms · grid (64, 1, 1) · tiny grid, big tiles",
+      sm:9.4, mem:21.8, occ:0.18, l2:41.6, conf:0, vc:"v2",
+      verdict:"Both engines idle — latency-bound. Occupancy 0.18 with low throughput on both sides is the register-pressure / small-grid signature. Raise occupancy or fuse it into a neighbor so the launch disappears.", cls:"warn" },
+    { name:"gemm_tiled", start:56, dur:4.1, durTxt:"4.1 ms", meta:"duration 4.1 ms · grid (256, 128, 1) · same shapes, tiled",
+      sm:89.2, mem:34.1, occ:0.71, l2:95.3, conf:0, vc:"v1",
+      verdict:"Compute-bound at 89% of peak, 95% L2 hits, zero bank conflicts — the tiling is working. Well-optimized: ship it.", cls:"good" }
+  ];
+  var METRIC_ROWS = [
+    { key:"sm",   label:"Compute (SM) %", fmt:function(v){ return v.toFixed(1)+"%"; }, bar:function(v){ return v; },        tone:"sm" },
+    { key:"mem",  label:"Memory %",       fmt:function(v){ return v.toFixed(1)+"%"; }, bar:function(v){ return v; },        tone:"mem" },
+    { key:"occ",  label:"Occupancy",      fmt:function(v){ return v.toFixed(2); },     bar:function(v){ return v*100; }, tone:"occ" },
+    { key:"l2",   label:"L2 hit rate %",  fmt:function(v){ return v.toFixed(1)+"%"; }, bar:function(v){ return v; },      tone:"l2" },
+    { key:"conf", label:"Bank conflicts", fmt:function(v){ return String(v); },        bar:function(v){ return Math.min(v*8,100); }, tone:"conf" }
+  ];
+  function toneClass(tone, v){
+    if(tone==="sm")   return v>=80 ? "f-good" : (v<50 ? "f-dim" : "f-warn");
+    if(tone==="mem")  return v>=80 ? "f-bad"  : "f-dim";
+    if(tone==="occ")  return "f-dim";
+    if(tone==="l2")   return v>=80 ? "f-good" : (v<50 ? "f-warn" : "f-dim");
+    return v>0 ? "f-bad" : "f-dim";
+  }
+
+  var tlLane = document.getElementById("tlLane");
+  var barEls = [];
+  KERNELS.forEach(function(k, i){
+    var b = el("button","tl-bar");
+    b.style.left  = (k.start/MS_TOTAL*100)+"%";
+    b.style.width = Math.max(k.dur/MS_TOTAL*100, 1.4)+"%";
+    b.title = k.name + " · " + k.durTxt;
+    var s = el("span", null, k.name);
+    if(k.dur/MS_TOTAL*100 < 9) s.style.display = "none";   // too narrow to label
+    b.appendChild(s);
+    b.addEventListener("click", function(){ selectKernel(i, true); });
+    tlLane.appendChild(b);
+    barEls.push(b);
+  });
+
+  var ncName = document.getElementById("ncName"), ncMeta = document.getElementById("ncMeta"),
+      ncRows = document.getElementById("ncRows"), ncVerdict = document.getElementById("ncVerdict"),
+      ncCard = document.getElementById("ncuCard");
+  var rowEls = [];
+  METRIC_ROWS.forEach(function(m){
+    var row = el("div","nrow");
+    row.appendChild(el("span", null, m.label));
+    var bar = el("div","nbar"); var fill = el("i"); bar.appendChild(fill);
+    row.appendChild(bar);
+    row.appendChild(el("b", null, "—"));
+    ncRows.appendChild(row);
+    rowEls.push({fill:fill, val:row.querySelector("b")});
+  });
+
+  var curKernel = -1, cycleTimer = 0;
+  function renderKernel(i){
+    var k = KERNELS[i];
+    ncName.textContent = k.name;
+    ncMeta.textContent = k.meta;
+    METRIC_ROWS.forEach(function(m, r){
+      var v = k[m.key];
+      rowEls[r].fill.className = toneClass(m.tone, v);
+      rowEls[r].fill.style.width = reduceMotion ? m.bar(v)+"%" : "0%";
+      if(!reduceMotion) setTimeout(function(){ rowEls[r].fill.style.width = m.bar(v)+"%"; }, 40 + r*70);
+      rowEls[r].val.textContent = m.fmt(v);
+    });
+    ncVerdict.className = "verdict " + k.vc;
+    ncVerdict.textContent = k.verdict;
+  }
+  function selectKernel(i, byUser){
+    curKernel = i;
+    barEls.forEach(function(b, j){ b.classList.toggle("on", j===i); });
+    ncCard.classList.add("live");
+    renderKernel(i);
+    if(byUser && cycleTimer){ clearInterval(cycleTimer); cycleTimer = 0; }
+  }
+  if(reduceMotion){
+    selectKernel(1, false);
+  } else {
+    var ioNcu = new IntersectionObserver(function(es){
+      es.forEach(function(e){
+        if(e.isIntersecting){
+          if(!curKernelChosen()) selectKernel(1, false);
+          if(!cycleTimer) cycleTimer = setInterval(function(){ selectKernel((curKernel+1)%KERNELS.length, false); }, 3400);
+          ioNcu.disconnect();
+        }
+      });
+    },{threshold:.35});
+    var curKernelChosen = function(){ return false; };  // auto-cycle owns selection until the user clicks
+    ioNcu.observe(tlLane);
+  }
+
+  /* ============================================================
+     2. metric explorer
+     ============================================================ */
+  var METRICS = [
+    { id:"sm", name:"Compute (SM) throughput", short:"% of peak math the SM pipes sustained",
+      def:"Fraction of the SM's peak FLOP rate the math pipelines actually sustained while the kernel ran. It averages the whole launch — a hot inner loop around slow tails still reads high.",
+      hi:"≥ 80% — compute-bound and nearly saturated. If the kernel already does minimal work, you're close to done.",
+      lo:"< 50% — the math units are starving. Either memory can't feed them, or warps are stalled (check Memory % and occupancy next).",
+      fix:"Cross-check Memory %. High memory + low compute → fix traffic (coalescing, tiling, reuse). Both low → latency: raise occupancy.",
+      naive:12.3, tiled:89.2, scale:"pct" },
+    { id:"mem", name:"Memory throughput", short:"% of peak HBM bandwidth in use",
+      def:"Fraction of peak HBM bandwidth the kernel sustains. A high value means the memory system is the limiter — the kernel is already getting everything the hardware can give.",
+      hi:"≥ 80% — memory-bound, riding the HBM limit. Good or bad depends on the kernel's job: a copy at 92% is perfect; a GEMM at 92% is leaving 8× on the table.",
+      lo:"< 50% with compute also low — neither engine is the limiter, so the kernel is latency-bound. The headroom is not a win; find what's stalling.",
+      fix:"Raise arithmetic intensity: tile through shared memory, fuse passes so bytes are reused, batch independent work.",
+      naive:91.7, tiled:34.1, scale:"pct" },
+    { id:"occ", name:"Achieved occupancy", short:"active warps ÷ max warps per SM",
+      def:"How many warps were live per SM relative to the hardware maximum. Latency hides behind parallelism: with enough warps, a memory stall on one overlaps math on another.",
+      hi:"High occupancy with high throughput is fine — and high occupancy with LOW throughput is fine too: you didn't need the extra warps. Occupancy is a means, not a score.",
+      lo:"Low occupancy AND low throughput is the signature of register / shared-memory pressure: too few warps in flight to hide latency.",
+      fix:"Cut registers per thread, shrink shared memory per block, launch more smaller blocks — but only if throughput is low too.",
+      naive:0.89, tiled:0.71, scale:"occ" },
+    { id:"l2", name:"L2 hit rate", short:"% of loads served by L2, not HBM",
+      def:"Share of memory requests the L2 could serve without a round-trip to HBM. It is the direct measure of data reuse — the thing tiling exists to raise.",
+      hi:"~90% — good reuse: each fetched byte is read many times. Tiled GEMMs live here (the chapter's tiled kernel: 95.3%).",
+      lo:"< 50% — poor locality; every element is fetched fresh from HBM. For GEMM-shaped work this is the loudest you-need-tiling signal.",
+      fix:"Reorder loops so data stays resident (tiling/blocking), stage tiles through shared memory, batch tokens to reuse weights.",
+      naive:23.1, tiled:95.3, scale:"pct" },
+    { id:"conf", name:"Bank conflicts", short:"serialized shared-memory accesses",
+      def:"Shared memory is split into 32 banks. A warp's access takes one cycle when threads hit distinct banks — and is serialized, cycle by cycle, when they collide. ncu reports the average conflicts per access.",
+      hi:"Any value above 0 is worth investigating: conflicts multiply that access's latency by the conflict count.",
+      lo:"0 — every shared access in both sample kernels was conflict-free.",
+      fix:"Pad the tile (tile[32][16] → tile[32][17]) or swizzle indices so column reads spread across banks. Often a 2-line change worth 10–30% of a shared-memory kernel.",
+      naive:0, tiled:0, scale:"conf" }
+  ];
+  var mcards = document.getElementById("mcards"), mdetail = document.getElementById("mdetail");
+  var cardEls = [];
+  METRICS.forEach(function(m, i){
+    var c = el("button","mcard");
+    var b = el("b"); b.appendChild(document.createTextNode(m.name));
+    var mv = el("span","mv", (m.scale==="occ" ? m.naive.toFixed(2)+" → "+m.tiled.toFixed(2)
+                             : m.naive+"% → "+m.tiled+"%"));
+    b.appendChild(mv); c.appendChild(b);
+    c.appendChild(el("span", null, m.short));
+    c.addEventListener("click", function(){ renderMetric(i); });
+    mcards.appendChild(c); cardEls.push(c);
+  });
+  function metricBar(label, v, scale){
+    var row = el("div","mrow2");
+    row.appendChild(el("span", null, label));
+    var bar = el("div","nbar"); var fill = el("i"); bar.appendChild(fill);
+    row.appendChild(bar);
+    var w = scale==="occ" ? v*100 : v;
+    fill.style.width = Math.max(Math.min(w,100), v>0?2:0) + "%";
+    row.appendChild(el("b", null, scale==="occ" ? v.toFixed(2) : (scale==="conf" ? String(v) : v.toFixed(1)+"%")));
+    return row;
+  }
+  function renderMetric(i){
+    var m = METRICS[i];
+    cardEls.forEach(function(c, j){ c.classList.toggle("on", j===i); });
+    mdetail.textContent = "";
+    mdetail.appendChild(el("h3", null, m.name));
+    mdetail.appendChild(el("div","def", m.def));
+    var bars = el("div");
+    bars.appendChild(metricBar("naive GEMM", m.naive, m.scale));
+    bars.appendChild(metricBar("tiled GEMM", m.tiled, m.scale));
+    if(m.scale==="conf"){
+      var z = el("div","note"); z.style.margin = "2px 0 0";
+      z.textContent = "Both sample kernels report zero — but a shared-memory transpose with column reads would show several per access.";
+      bars.appendChild(z);
+    }
+    mdetail.appendChild(bars);
+    var hs = el("div","hs");
+    var hi = el("div","hcard hi"); hi.appendChild(el("div","hh","HIGH READS AS")); hi.appendChild(el("p", null, m.hi));
+    var lo = el("div","hcard lo"); lo.appendChild(el("div","hh","LOW READS AS"));  lo.appendChild(el("p", null, m.lo));
+    hs.appendChild(hi); hs.appendChild(lo);
+    mdetail.appendChild(hs);
+    var fx = el("div","fixline");
+    fx.appendChild(el("b", null, "What to do: "));
+    fx.appendChild(document.createTextNode(m.fix));
+    mdetail.appendChild(fx);
+  }
+  renderMetric(1);   // open on Memory % — the chapter's smoking gun
+
+  /* ============================================================
+     3. dashboard bars animate on reveal
+     ============================================================ */
+  var dashFilled = false;
+  function fillDash(){
+    if(dashFilled) return; dashFilled = true;
+    var fills = document.querySelectorAll("#gemms .dbar i");
+    fills.forEach(function(f, i){
+      var w = f.dataset.w + "%";
+      if(reduceMotion){ f.style.width = w; }
+      else setTimeout(function(){ f.style.width = w; }, 90*i);
+    });
+  }
+  if(reduceMotion){ fillDash(); }
+  else{
+    var ioDash = new IntersectionObserver(function(es){
+      es.forEach(function(e){ if(e.isIntersecting){ setTimeout(fillDash, 200); ioDash.disconnect(); } });
+    },{threshold:.3});
+    ioDash.observe(document.querySelector(".dash"));
+  }
+
+  /* ============================================================
+     4. roofline explorer
+     ============================================================ */
+  var W=920, H=520, PL=64, PR=20, PT=18, PB=50;
+  var AI0=0.1, AI1=10000, TF0=0.3, TF1=3000;
+  var BW=3.35, PEAK=990, RIDGE=PEAK/BW;            // 295.5 FLOPs/byte
+  var FLOPS=137.4e9;                                // 4096³ GEMM: 2·M·N·K
+  var LX0=Math.log10(AI0), LX1=Math.log10(AI1), LY0=Math.log10(TF0), LY1=Math.log10(TF1);
+  var PXW = W-PL-PR, PXH = H-PT-PB;
+
+  var svg = document.getElementById("roofSvg");
+  var NS = "http://www.w3.org/2000/svg";
+  function mk(tag, attrs, parent){
+    var e = document.createElementNS(NS, tag);
+    for(var k in attrs) e.setAttribute(k, attrs[k]);
+    (parent||svg).appendChild(e);
+    return e;
+  }
+  function X(ai){ return PL + (Math.log10(ai)-LX0)/(LX1-LX0)*PXW; }
+  function Y(tf){ return PT + (LY1-Math.log10(tf))/(LY1-LY0)*PXH; }
+  function invX(px){ return Math.pow(10, LX0 + (px-PL)/PXW*(LX1-LX0)); }
+  function fmtTF(t){
+    if(t>=100) return Math.round(t)+" TF";
+    if(t>=10)  return t.toFixed(1)+" TF";
+    return t.toFixed(2)+" TF";
+  }
+  function fmtBytes(b){
+    if(b >= 1e12) return (b/1e12).toFixed(2)+" TB";
+    if(b >= 1e9)  return (b/1e9)>=100 ? Math.round(b/1e9)+" GB" : (b/1e9).toFixed(1)+" GB";
+    return Math.round(b/1e6)+" MB";
+  }
+  function fmtAI(ai){ return ai>=100 ? String(Math.round(ai)) : (ai>=10 ? String(Math.round(ai)) : ai.toFixed(1)); }
+
+  /* grid: minors + majors, both axes */
+  var d, k, v;
+  for(d=0; d<5; d++){
+    for(k=2; k<=9; k++){
+      v = k*Math.pow(10, d-1);                          // 0.2 … 9000
+      mk("line",{x1:X(v),y1:PT,x2:X(v),y2:H-PB,stroke:"#141d2c","stroke-width":1});
+    }
+    for(k=2; k<=9; k++){
+      v = k*Math.pow(10, d-1)*3;                        // y minors 0.6 … 27000 → clipped below
+      if(v<=TF1) mk("line",{x1:PL,y1:Y(v),x2:W-PR,y2:Y(v),stroke:"#141d2c","stroke-width":1});
+    }
+  }
+  [0.1,1,10,100,1000,10000].forEach(function(t){
+    mk("line",{x1:X(t),y1:PT,x2:X(t),y2:H-PB,stroke:"#1e2a3c","stroke-width":1});
+    var lbl = mk("text",{x:X(t),y:H-PB+20,"text-anchor":"middle",fill:"#4b5a6e","font-size":11});
+    lbl.textContent = t>=1000 ? (t/1000)+"k" : String(t);
+  });
+  [1,10,100,1000].forEach(function(t){
+    mk("line",{x1:PL,y1:Y(t),x2:W-PR,y2:Y(t),stroke:"#1e2a3c","stroke-width":1});
+    var lbl = mk("text",{x:PL-8,y:Y(t)+4,"text-anchor":"end",fill:"#4b5a6e","font-size":11});
+    lbl.textContent = t+" TF";
+  });
+
+  /* region labels + ridge */
+  var regL = mk("text",{x:X(2.4),y:H-PB-12,fill:"rgba(255,144,64,.75)","font-size":11.5});
+  regL.textContent = "← memory-bound · bytes are the ceiling";
+  var regR = mk("text",{x:W-PR-4,y:H-PB-12,"text-anchor":"end",fill:"rgba(63,185,80,.75)","font-size":11.5});
+  regR.textContent = "compute-bound · math is the ceiling";
+  mk("line",{x1:X(RIDGE),y1:PT,x2:X(RIDGE),y2:H-PB,stroke:"#4b5a6e","stroke-width":1.2,"stroke-dasharray":"3 5"});
+  var ridgeLbl = mk("text",{x:X(RIDGE)+8,y:H-PB-30,fill:"#7d8ca0","font-size":11});
+  ridgeLbl.textContent = "ridge · "+Math.floor(RIDGE)+" F/B — math takes over →";
+
+  /* the roof */
+  var aiStart = TF0/BW;
+  var roofPath = mk("path",{d:"M"+X(aiStart)+","+Y(TF0)+" L"+X(RIDGE)+","+Y(PEAK)+" L"+X(AI1)+","+Y(PEAK),
+                            fill:"none",stroke:"#a8bdd4","stroke-width":3,"stroke-linejoin":"round"});
+  mk("path",{d:"M"+X(aiStart)+","+Y(TF0)+" L"+X(RIDGE)+","+Y(PEAK)+" L"+X(AI1)+","+Y(PEAK),
+             fill:"none",stroke:"rgba(168,189,212,.18)","stroke-width":9,"stroke-linejoin":"round"});
+  var slopeDeg = Math.atan2(Y(BW*10)-Y(BW*1), X(10)-X(1))*180/Math.PI;
+  var diagLbl = mk("text",{x:X(4),y:Y(BW*4)-13,fill:"#7d8ca0","font-size":11,
+                           transform:"rotate("+slopeDeg.toFixed(1)+","+X(4)+","+(Y(BW*4)-13)+")","text-anchor":"middle"});
+  diagLbl.textContent = "memory ceiling · 3.35 TB/s × intensity";
+  var compLbl = mk("text",{x:W-PR-6,y:Y(PEAK)+24,fill:"#7d8ca0","font-size":11,"text-anchor":"end"});
+  compLbl.textContent = "compute ceiling · 990 TF fp16 dense";
+
+  /* anchor kernels (measured) */
+  var ANCHORS = [
+    { ai:0.5,  eff:1,     name:"decode GEMV · b=1",  dx:9,  dy:-6, anchor:"start" },
+    { ai:16,   eff:1,     name:"decode · b=32",      dx:-9, dy:4,  anchor:"end" },
+    { ai:40,   eff:0.917, name:"naive GEMM · 38 ms", dx:-9, dy:-6, anchor:"end" },
+    { ai:773,  eff:0.892, name:"tiled GEMM · 4.1 ms",dx:-9, dy:20, anchor:"end" },
+    { ai:3000, eff:0.95,  name:"cuBLAS-class",       dx:-9, dy:-12, anchor:"end" }
+  ];
+  ANCHORS.forEach(function(a){
+    var tf = Math.min(BW*a.ai, PEAK)*a.eff;
+    mk("circle",{cx:X(a.ai),cy:Y(tf),r:4.5,fill:"#0a0e14",stroke:"#7d8ca0","stroke-width":1.5});
+    var t = mk("text",{x:X(a.ai)+a.dx,y:Y(tf)+a.dy,"text-anchor":a.anchor,fill:"#7d8ca0","font-size":10.5});
+    t.textContent = a.name;
+  });
+
+  /* draggable kernel dot */
+  var cur = 40;
+  var guide = mk("line",{x1:X(cur),y1:Y(Math.min(BW*cur,PEAK)),x2:X(cur),y2:H-PB,
+                         stroke:"rgba(255,255,255,.28)","stroke-width":1,"stroke-dasharray":"2 4"});
+  var dotHalo = mk("circle",{cx:X(cur),cy:Y(Math.min(BW*cur,PEAK)),r:14,fill:"rgba(255,144,64,.18)"});
+  var dot = mk("circle",{cx:X(cur),cy:Y(Math.min(BW*cur,PEAK)),r:8,fill:"#ff9040",stroke:"#0a0e14","stroke-width":2});
+  var dotLbl = mk("text",{x:X(cur),y:Y(Math.min(BW*cur,PEAK))-16,"text-anchor":"middle",
+                          fill:"#dbe4ee","font-size":12,"font-weight":700});
+
+  var rAi=document.getElementById("rAi"), rTf=document.getElementById("rTf"),
+      rPct=document.getElementById("rPct"), rMem=document.getElementById("rMem"),
+      rBytes=document.getElementById("rBytes"), rChip=document.getElementById("rChip"),
+      rFix=document.getElementById("rFix"), aiVal=document.getElementById("aiVal"),
+      aiRange=document.getElementById("aiRange");
+
+  function update(){
+    var ai = cur;
+    var tf = Math.min(BW*ai, PEAK);
+    var x = X(ai), y = Y(tf);
+    dot.setAttribute("cx",x); dot.setAttribute("cy",y);
+    dotHalo.setAttribute("cx",x); dotHalo.setAttribute("cy",y);
+    var lx = x+14, lanch = "start", ly = y+18;      // label rides right/below, clear of the roof line
+    if(x > W-130){ lx = x-14; lanch = "end"; }
+    if(ly > H-PB){ ly = y-12; }
+    dotLbl.setAttribute("x",lx); dotLbl.setAttribute("y",ly);
+    dotLbl.setAttribute("text-anchor",lanch);
+    dotLbl.textContent = fmtTF(tf);
+    guide.setAttribute("x1",x); guide.setAttribute("x2",x);
+    guide.setAttribute("y1",y); guide.setAttribute("y2",H-PB);
+
+    var memCeil = BW*ai, frac = ai/RIDGE;
+    var cls, chipTxt, fixHtml;
+    if(frac < 0.85){
+      cls="mem"; chipTxt="MEMORY-BOUND"; dot.setAttribute("fill","#ff9040"); dotHalo.setAttribute("fill","rgba(255,144,64,.18)");
+      fixHtml = "The memory system is the ceiling — even a perfect kernel can't beat 3.35 TB/s × your intensity. "+
+                "<b>Stop tuning threads; raise reuse.</b> Tile through shared memory, fuse passes, batch work — "+
+                "each byte fetched should feed many more FLOPs.";
+    } else if(frac > 1.15){
+      cls="comp"; chipTxt="COMPUTE-BOUND"; dot.setAttribute("fill","#3fb950"); dotHalo.setAttribute("fill","rgba(63,185,80,.18)");
+      fixHtml = "Math is now the limit. Under ~80% of peak? <b>Suspect the instruction mix</b> — tensor cores vs fp32, "+
+                "FMA vs separate mul/add. Above ~85% you're near done: reprofile after the next change and move on.";
+    } else {
+      cls="knee"; chipTxt="AT THE RIDGE"; dot.setAttribute("fill","#d29922"); dotHalo.setAttribute("fill","rgba(210,153,34,.18)");
+      fixHtml = "You're at the knee — both ceilings are equally close. <b>Push right of the ridge:</b> that's what "+
+                "tiling and batching are for. Batch-32 decode sits 32× further right than batch-1, for free.";
+    }
+    rChip.className = "rc "+cls; rChip.textContent = chipTxt;
+    rFix.className = "rx "+cls;
+    rFix.innerHTML = fixHtml;
+    rAi.textContent = fmtAI(ai);
+    rTf.textContent = fmtTF(tf);
+    rPct.textContent = (tf/PEAK*100).toFixed(1)+"%";
+    rMem.textContent = fmtTF(memCeil);
+    rBytes.textContent = fmtBytes(FLOPS/ai);
+    aiVal.textContent = fmtAI(ai)+" F/B";
+    aiRange.value = Math.round(Math.log10(ai/AI0)*100);
+  }
+
+  var drag = false;
+  function toAI(e){
+    var p = svg.createSVGPoint(); p.x = e.clientX; p.y = e.clientY;
+    var m = svg.getScreenCTM(); if(!m) return cur;
+    p = p.matrixTransform(m.inverse());
+    var ai = invX(p.x);
+    return Math.min(9000, Math.max(0.11, ai));
+  }
+  var hit = mk("rect",{x:PL,y:PT,width:PXW,height:PXH,fill:"transparent"});
+  hit.style.cursor = "ew-resize";
+  hit.addEventListener("pointerdown", function(e){ drag = true; hit.setPointerCapture(e.pointerId); cur = toAI(e); update(); });
+  hit.addEventListener("pointermove", function(e){ if(drag){ cur = toAI(e); update(); } });
+  hit.addEventListener("pointerup",   function(){ drag = false; });
+  hit.addEventListener("pointercancel",function(){ drag = false; });
+  aiRange.addEventListener("input", function(){ cur = AI0*Math.pow(10, aiRange.value/100); update(); });
+  document.querySelectorAll("#roofPresets .preset").forEach(function(b){
+    b.addEventListener("click", function(){
+      cur = parseFloat(b.dataset.ai); update();
+      document.querySelectorAll("#roofPresets .preset").forEach(function(x){ x.classList.toggle("on", x===b); });
+    });
+  });
+  update();
+
+  /* mark the default preset chip */
+  document.querySelectorAll("#roofPresets .preset").forEach(function(b){
+    if(b.dataset.ai === "40") b.classList.add("on");
+  });
+})();
+</script>
+</body>
+</html>
