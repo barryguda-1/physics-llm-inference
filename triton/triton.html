@@ -1,0 +1,1107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Triton — Visual Explainer</title>
+<style>
+  :root{
+    --bg:#0a0e14; --panel:#101722; --panel2:#0c1220; --border:#1e2a3c;
+    --text:#dbe4ee; --muted:#7d8ca0; --faint:#4b5a6e;
+    --oh:#ff9040; --oh-dim:rgba(255,144,64,.16);
+    --work:#3fb950; --work-dim:rgba(63,185,80,.15);
+    --accent:#58a6ff; --nvidia:#76b900;
+    --tri:#2dd4bf; --tri-dim:rgba(45,212,191,.13);
+    --mono:"Cascadia Code","JetBrains Mono",Consolas,ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:16px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+       -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 22px}
+  code,.mono{font-family:var(--mono)}
+  a{color:var(--accent)}
+
+  /* ---------- header ---------- */
+  header{padding:64px 0 40px;position:relative;overflow:hidden}
+  header::before{content:"";position:absolute;inset:0;
+    background:
+      radial-gradient(600px 300px at 15% 0%,rgba(45,212,191,.10),transparent 60%),
+      radial-gradient(700px 340px at 85% 10%,rgba(88,166,255,.09),transparent 60%);}
+  header .wrap{position:relative}
+  .kicker{color:var(--tri);font-size:12px;font-weight:700;letter-spacing:.16em;text-transform:uppercase}
+  h1{font-size:clamp(28px,5vw,44px);line-height:1.15;margin:10px 0 12px;letter-spacing:-.01em}
+  h1 .hl{color:var(--tri)}
+  .sub{color:var(--muted);max-width:780px;font-size:17px}
+  .chips{display:flex;gap:12px;flex-wrap:wrap;margin-top:26px}
+  .chip{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:12px 18px;min-width:150px}
+  .chip b{display:block;font-family:var(--mono);font-size:22px;font-weight:600}
+  .chip span{color:var(--muted);font-size:12.5px}
+  .chip.c1 b{color:var(--tri)} .chip.c2 b{color:var(--work)} .chip.c3 b{color:var(--accent)}
+
+  nav.top{position:sticky;top:0;z-index:50;background:rgba(10,14,20,.88);backdrop-filter:blur(8px);
+          border-bottom:1px solid var(--border)}
+  nav.top .wrap{display:flex;gap:22px;padding:10px 22px;overflow-x:auto}
+  nav.top a{color:var(--muted);text-decoration:none;font-size:13.5px;white-space:nowrap;padding:4px 0}
+  nav.top a:hover{color:var(--text)}
+
+  section{padding:62px 0;border-top:1px solid var(--border)}
+  h2{font-size:26px;margin:6px 0 8px;letter-spacing:-.01em}
+  h2 .n{color:var(--faint);font-family:var(--mono);font-size:18px;margin-right:10px}
+  .lead{color:var(--muted);max-width:780px;margin:0 0 28px}
+  .lead code{color:var(--text);background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:1px 6px;font-size:.85em}
+
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:22px}
+  .note{font-size:12.5px;color:var(--faint);margin-top:12px}
+
+  pre.code{background:#080d15;border:1px solid var(--border);border-radius:12px;padding:16px 18px;
+           overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.6;margin:18px 0 0}
+  pre.code .k{color:#c586c0} pre.code .f{color:#dcdcaa} pre.code .s{color:#ce9178}
+  pre.code .c{color:#5a7a4a;font-style:italic} pre.code .n{color:#b5cea8} pre.code .t{color:#4ec9b0}
+  pre.code .ln{display:block;padding:2px 8px;margin:0 -8px;border-left:3px solid transparent;
+               border-radius:5px;transition:background .25s,border-color .25s}
+  pre.code .ln.on{background:var(--tri-dim);border-left-color:var(--tri)}
+  .code-hint{color:var(--faint);font-size:12px;margin:8px 2px 0}
+  .codecap{font-size:12.5px;color:var(--muted);font-weight:600;margin:0 0 8px;letter-spacing:.04em;text-transform:uppercase}
+  .pair{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+  .pair pre.code{margin:0;font-size:12px}
+  .pair h4{margin:0 0 8px;font-size:12.5px;font-weight:600}
+  .pair h4.cuda{color:var(--accent)} .pair h4.tri{color:var(--tri)}
+
+  .btn{background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:9px;
+       padding:8px 16px;font-size:13.5px;cursor:pointer;transition:.2s;font-family:inherit}
+  .btn:hover{border-color:var(--tri)}
+  .btn.primary{background:var(--tri);border-color:var(--tri);color:#08111e;font-weight:700}
+  .ctl{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:14px}
+  .kbadge{margin-left:auto;font-family:var(--mono);font-size:12.5px;color:var(--muted);
+          border:1px solid var(--border);border-radius:999px;padding:5px 14px}
+  .kbadge b{color:var(--tri)}
+
+  /* ---------- 1. sweep ---------- */
+  .sweepgrid{display:grid;grid-template-columns:repeat(16,1fr);gap:4px;margin:8px 0 4px}
+  .swc{aspect-ratio:1;display:flex;align-items:center;justify-content:center;background:var(--panel2);
+       border:1px solid var(--border);border-radius:6px;font-family:var(--mono);font-size:10px;color:var(--faint);
+       transition:background .35s,color .35s,border-color .35s,box-shadow .35s;min-width:0}
+  .swc.on{background:var(--tri);border-color:var(--tri);color:#08111e;font-weight:700;
+          box-shadow:0 0 8px rgba(45,212,191,.45)}
+  .swc.m{background:var(--oh-dim);border-color:var(--oh);color:var(--oh)}
+  .sweepread{margin-top:14px;font-size:13.5px;color:var(--muted);background:var(--panel2);
+             border:1px solid var(--border);border-radius:10px;padding:12px 16px;font-family:var(--mono);min-height:46px}
+  .sweepread .fx{color:var(--text)}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;font-size:12.5px;color:var(--muted)}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+
+  /* ---------- 2. grid & mask ---------- */
+  .presets{display:flex;gap:8px;flex-wrap:wrap}
+  .preset{background:var(--panel2);border:1px solid var(--border);color:var(--muted);border-radius:999px;
+          padding:5px 14px;font-size:12.5px;cursor:pointer;font-family:var(--mono);transition:.2s}
+  .preset:hover{color:var(--text);border-color:var(--tri)}
+  .preset.on{color:#08111e;background:var(--tri);border-color:var(--tri);font-weight:700}
+  .ctl2 label{display:block;font-size:13px;color:var(--muted);margin:14px 0 4px}
+  .ctl2 .val{float:right;font-family:var(--mono);color:var(--text)}
+  input[type=range]{width:100%;accent-color:var(--tri);height:26px}
+  .segs{display:flex;gap:2px;height:34px;margin-top:6px}
+  .seg{flex:1;min-width:1px;background:var(--work-dim);border:1px solid rgba(63,185,80,.4);
+       border-radius:3px;position:relative;overflow:hidden}
+  .seg::before{content:"";position:absolute;top:0;bottom:0;right:0;width:var(--pw,0%);
+               background:rgba(255,144,64,.45)}
+  .estats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:18px}
+  .estat{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:12px 14px;
+         border-top:3px solid var(--faint);min-width:0}
+  .estat b{font-family:var(--mono);font-size:21px;font-weight:600;display:block;line-height:1.2}
+  .estat span{color:var(--muted);font-size:11.5px;line-height:1.4;display:block;margin-top:3px}
+  .estat.good b{color:var(--work)} .estat.bad b{color:var(--oh)} .estat.tri b{color:var(--tri)}
+  .launchline{margin-top:16px;font-family:var(--mono);font-size:13px;color:var(--muted);background:#080d15;
+              border:1px solid var(--border);border-radius:10px;padding:10px 14px;overflow-x:auto;white-space:nowrap}
+  .launchline b{color:var(--tri)}
+  .verdict{margin-top:14px;padding:12px 16px;border-radius:10px;background:var(--panel2);
+           border-left:3px solid var(--faint);font-size:14px}
+  .verdict.v1{border-color:var(--work);color:#7ee2a0}
+  .verdict.v2{border-color:#d29922;color:#e3b341}
+  .verdict.v3{border-color:var(--tri);color:#7ce4d8}
+  .verdict.vbad{border-color:var(--oh);color:#ffb066}
+
+  /* ---------- 3. matmul walkthrough ---------- */
+  .mm{display:grid;grid-template-columns:1.15fr 1fr;gap:22px;align-items:start}
+  .mm pre.code{margin:0;font-size:12.5px}
+  .mrow{display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap}
+  .mgcol{text-align:center}
+  .mmt{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;width:150px;margin:0 auto}
+  .mmt.wide{width:196px}
+  .mmt .mt{aspect-ratio:1;background:var(--panel2);border:1px solid var(--border);border-radius:6px;
+           position:relative;overflow:hidden;transition:background .3s,border-color .3s,box-shadow .3s}
+  .mmt.click .mt{cursor:pointer}
+  .mmt .mt:hover{border-color:#33465f}
+  .mmt .mt.hot{background:rgba(45,212,191,.28);border-color:var(--tri)}
+  .mmt .mt.warm{background:var(--tri-dim);border-color:rgba(45,212,191,.4)}
+  .mmt .mt.sel{border-color:#e6edf3;box-shadow:0 0 0 1px #e6edf3}
+  .mmt .mt.pulse{box-shadow:0 0 12px rgba(45,212,191,.6)}
+  .mmt .mt.done{background:var(--work-dim);border-color:rgba(63,185,80,.5)}
+  .mmt .mt .fill{position:absolute;left:0;right:0;bottom:0;height:0%;background:rgba(45,212,191,.4);
+                 transition:height .5s cubic-bezier(.2,.7,.3,1)}
+  .mmt .mt.done .fill{background:rgba(63,185,80,.5)}
+  .eqlab{font-family:var(--mono);font-size:10.5px;color:var(--faint);margin-top:6px}
+  .mmop{font-family:var(--mono);font-size:24px;color:var(--faint);padding-bottom:20px}
+  .minis{display:grid;grid-template-columns:repeat(8,1fr);gap:4px;max-width:210px;margin:10px auto 0}
+  .minis .mi{aspect-ratio:1;border-radius:4px;background:var(--panel2);border:1px solid var(--border);
+             cursor:pointer;transition:.25s}
+  .minis .mi:hover{border-color:#33465f}
+  .minis .mi.cur{border-color:var(--tri);background:var(--tri-dim);box-shadow:0 0 0 1px var(--tri)}
+  .minis .mi.done{background:var(--work-dim);border-color:rgba(63,185,80,.5)}
+  .mprog{height:6px;border-radius:3px;background:var(--panel2);border:1px solid var(--border);
+         overflow:hidden;margin-top:14px}
+  .mprog .fill{height:100%;width:0;background:var(--tri);transition:width .5s}
+  .mm-ctl{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:14px}
+  .msteplbl{font-family:var(--mono);font-size:12.5px;color:var(--muted);margin-left:auto}
+  .mchips{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+  .mchip{font-family:var(--mono);font-size:12.5px;color:var(--muted);background:var(--panel2);
+         border:1px solid var(--border);border-radius:8px;padding:7px 12px}
+  .mchip b{color:var(--tri)}
+  .mcap{margin-top:14px;font-size:13.5px;color:var(--muted);min-height:88px}
+  .mcap b{color:var(--text)}
+
+  /* ---------- 4. lowering ---------- */
+  .flow{display:flex;gap:0;align-items:stretch;flex-wrap:wrap;justify-content:center;margin:6px 0 4px}
+  .fnode{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:10px 14px;
+         text-align:center;min-width:118px}
+  .fnode b{display:block;font-family:var(--mono);font-size:13px;color:var(--text)}
+  .fnode span{color:var(--muted);font-size:11px;line-height:1.4;display:block}
+  .fnode.last{border-color:rgba(45,212,191,.5);background:var(--tri-dim)}
+  .fnode.last b{color:var(--tri)}
+  .farr{align-self:center;color:var(--faint);padding:0 10px;font-family:var(--mono)}
+  .autochips{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+  .autochip{background:var(--panel2);border:1px solid var(--border);color:var(--muted);border-radius:999px;
+            padding:6px 14px;font-size:12.5px;cursor:pointer;transition:.2s;font-family:inherit}
+  .autochip:hover{color:var(--text);border-color:var(--tri)}
+  .autochip.on{color:#08111e;background:var(--tri);border-color:var(--tri);font-weight:700}
+  .autodetail{margin-top:14px;font-size:13.5px;color:var(--muted);background:var(--panel2);
+              border:1px solid var(--border);border-radius:10px;padding:14px 16px;min-height:96px}
+  .autodetail b{color:var(--tri)}
+
+  /* ---------- 5. gap ---------- */
+  .cmp{display:grid;grid-template-columns:150px 1fr;gap:14px;align-items:center;margin-top:12px}
+  .cmp .lbl{color:var(--muted);font-size:12.5px;text-align:right}
+  .cmp .lbl b{display:block;font-family:var(--mono);color:var(--text);font-size:14px}
+  .tbar{height:38px;border-radius:10px;overflow:hidden;display:flex;border:1px solid var(--border);
+        background:var(--panel2);position:relative}
+  .tbar .fill{height:100%;width:0;transition:width 1.2s cubic-bezier(.2,.7,.3,1);
+              display:flex;align-items:center;justify-content:flex-end;padding-right:10px;
+              font-family:var(--mono);font-weight:700;font-size:12.5px;color:#0a0e14;white-space:nowrap}
+  .tbar .fill.nv{background:var(--work)}
+  .tbar .fill.tri{background:var(--tri)}
+  .tbar .fill.est{background:repeating-linear-gradient(45deg,#2aa89a,#2aa89a 7px,#23907f 7px,#23907f 14px)}
+  .tbar .fill.dead{background:repeating-linear-gradient(45deg,#7a4a2b,#7a4a2b 7px,#63391f 7px,#63391f 14px);
+                   color:#ffd9b8}
+  .ticks{display:flex;justify-content:space-between;color:var(--faint);font-family:var(--mono);font-size:11px;margin-top:5px}
+  .selrow{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px}
+  .selrow label{font-size:11.5px;color:var(--muted);display:flex;flex-direction:column;gap:4px;min-width:96px}
+  .selrow label .sv{font-family:var(--mono);color:var(--text);font-size:12.5px}
+  select{background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:8px;
+         padding:6px 8px;font-family:var(--mono);font-size:13px;width:100%}
+  select:focus{outline:1px solid var(--tri)}
+  .gstats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:18px}
+  .caveat{margin-top:20px;padding:14px 18px;border-radius:12px;background:rgba(210,153,34,.07);
+          border:1px solid rgba(210,153,34,.35);font-size:14px}
+  .caveat b{color:#e3b341}
+
+  /* ---------- 6. choice ---------- */
+  .strats{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+  .strat{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:18px;
+         display:flex;flex-direction:column;gap:10px;position:relative}
+  .strat h3{margin:0;font-size:15.5px}
+  .strat p{margin:0;color:var(--muted);font-size:13px;line-height:1.55;flex:1}
+  .strat .mini{display:flex;align-items:center;gap:5px;flex-wrap:wrap;font-family:var(--mono);font-size:10.5px}
+  .strat .m{background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:2px 6px;color:var(--muted)}
+  .strat .m.hi{border-color:var(--tri);color:var(--tri);background:var(--tri-dim)}
+  .strat .m.bad{border-color:rgba(255,144,64,.5);color:var(--oh)}
+  .strat .arr{color:var(--faint)}
+  .strat.star{border-color:var(--tri);box-shadow:0 0 0 1px var(--tri),0 10px 34px -12px rgba(45,212,191,.35)}
+  .strat .badge{position:absolute;top:-11px;right:12px;background:var(--tri);color:#0a0e14;
+                font-size:10px;font-weight:800;letter-spacing:.06em;border-radius:999px;padding:3px 10px;text-transform:uppercase}
+  .strat.cu .badge{background:var(--accent);color:#0a0e14}
+  .strat.cu.star{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent),0 10px 34px -12px rgba(88,166,255,.35)}
+  .strat.cu h3{color:var(--accent)}
+  .strat.lib .badge{background:var(--work);color:#0a0e14}
+
+  footer{padding:44px 0 60px;border-top:1px solid var(--border)}
+  .formula{font-family:var(--mono);font-size:15px;color:var(--muted);text-align:center;padding:8px 0 4px}
+  .formula b{color:var(--tri)}
+  .fin{color:var(--faint);text-align:center;font-size:13px;margin-top:10px}
+
+  .reveal{opacity:0;transform:translateY(16px);transition:opacity .6s ease,transform .6s ease}
+  .reveal.in{opacity:1;transform:none}
+
+  @media(max-width:940px){
+    .mm{grid-template-columns:1fr}
+    .estats{grid-template-columns:1fr 1fr}
+    .gstats{grid-template-columns:1fr 1fr}
+    .cmp{grid-template-columns:110px 1fr}
+    .fnode{min-width:100px}
+  }
+  @media(max-width:620px){
+    .pair{grid-template-columns:1fr}
+    .strats{grid-template-columns:1fr}
+    .estats{grid-template-columns:1fr 1fr}
+    .sweepgrid{gap:2px}
+    .swc{font-size:7.5px;border-radius:4px}
+    .mmt{width:126px}
+    .mmt.wide{width:164px}
+    .cmp{grid-template-columns:86px 1fr}
+  }
+  @media(prefers-reduced-motion:reduce){
+    *{transition:none!important;animation:none!important;scroll-behavior:auto}
+  }
+</style>
+</head>
+<body>
+
+<nav class="top"><div class="wrap">
+  <a href="#blocks">① Blocks, not threads</a>
+  <a href="#grid">② The grid &amp; the mask</a>
+  <a href="#matmul">③ Inside the tiled matmul</a>
+  <a href="#lowering">④ tl.dot, lowered</a>
+  <a href="#gap">⑤ The 83% gap</a>
+  <a href="#choice">⑥ Triton or CUDA?</a>
+</div></nav>
+
+<header><div class="wrap">
+  <div class="kicker">GPU Inference · Kernel Programming</div>
+  <h1><span class="hl">Triton</span>:<br>write one block — the grid writes itself</h1>
+  <p class="sub">Triton is a Python DSL for GPU kernels built on a different abstraction than CUDA:
+     your code describes what <em>one program</em> does to a <em>block</em> of data, and the compiler
+     derives the thread assignment, memory coalescing, shared-memory staging, and tensor-core
+     scheduling. You keep control of the algorithm — tiling, fusion, what loads when — and stop
+     managing threads entirely. The bill for that convenience, measured: <b>573 TFLOPS vs cuBLAS's
+     688</b> on the same H100 matmul — 83%, from ~30 readable lines.</p>
+  <div class="chips">
+    <div class="chip c1"><b>83%</b><span>of cuBLAS · 573 vs 688 TFLOPS fp16 matmul on H100</span></div>
+    <div class="chip c2"><b>0</b><span>thread indices computed by hand — blocks all the way down</span></div>
+    <div class="chip c3"><b>1 call</b><span>tl.dot → SMEM staging, swizzles &amp; mma.sync, generated</span></div>
+  </div>
+</div></header>
+
+<!-- ============ 1. BLOCKS ============ -->
+<section id="blocks"><div class="wrap reveal">
+  <div class="kicker">Section 1 · Interactive</div>
+  <h2><span class="n">01</span>Blocks, not threads</h2>
+  <p class="lead">A CUDA kernel is written from the point of view of a <em>thread</em>: 58 elements
+     means 58 threads, each computing its own index. A Triton kernel is written from the point of
+     view of a <em>program</em>: the same 58 elements are 4 programs, each handling a
+     <code>BLOCK=16</code> chunk as one vector. Same hardware, same launch — a different sentence.
+     Press play and watch the four programs sweep the vector.</p>
+
+  <div class="panel">
+    <div class="pair">
+      <div>
+        <h4 class="cuda">CUDA — one line per thread</h4>
+        <pre class="code"><span class="t">__global__</span> <span class="k">void</span> <span class="f">add_kernel</span>(<span class="k">const</span> <span class="t">float</span>* x,
+        <span class="k">const</span> <span class="t">float</span>* y, <span class="t">float</span>* out, <span class="t">int</span> n){
+    <span class="t">int</span> i = blockIdx.x * blockDim.x + threadIdx.x;
+    <span class="k">if</span> (i &lt; n) out[i] = x[i] + y[i];
+}
+<span class="c">// launch: 58 threads in 5 warps, you count them</span>
+add_kernel&lt;&lt;&lt;<span class="n">cdiv</span>(n, <span class="n">256</span>), <span class="n">256</span>&gt;&gt;&gt;(x, y, out, n);</pre>
+      </div>
+      <div>
+        <h4 class="tri">Triton — one block per program</h4>
+        <pre class="code"><span class="ln" data-i="0"><span class="k">@triton.jit</span></span>
+<span class="ln" data-i="0"><span class="k">def</span> <span class="f">add_kernel</span>(x_ptr, y_ptr, out_ptr, n,</span>
+<span class="ln" data-i="0">              BLOCK: <span class="t">tl.constexpr</span>):</span>
+<span class="ln" data-i="1">    pid = tl.<span class="f">program_id</span>(<span class="n">0</span>)          <span class="c"># like blockIdx.x</span></span>
+<span class="ln" data-i="1">    offsets = pid * BLOCK + tl.<span class="f">arange</span>(<span class="n">0</span>, BLOCK)</span>
+<span class="ln" data-i="2">    mask = offsets &lt; n              <span class="c"># boundary, in one line</span></span>
+<span class="ln" data-i="3">    x = tl.<span class="f">load</span>(x_ptr + offsets, mask=mask)</span>
+<span class="ln" data-i="3">    y = tl.<span class="f">load</span>(y_ptr + offsets, mask=mask)</span>
+<span class="ln" data-i="3">    tl.<span class="f">store</span>(out_ptr + offsets, x + y, mask=mask)</span></pre>
+      </div>
+    </div>
+
+    <div class="sweepgrid" id="swGrid" style="margin-top:18px"></div>
+    <div class="legend">
+      <span><i style="background:var(--tri)"></i>lanes this program is computing right now</span>
+      <span><i style="background:var(--oh-dim);border:1px solid var(--oh)"></i>lanes the mask turned off (past n)</span>
+    </div>
+    <div class="ctl">
+      <button class="btn primary" id="swPlay">▶ Play</button>
+      <button class="btn" id="swStep">Step ›</button>
+      <button class="btn" id="swReset">↺ Reset</button>
+      <div class="kbadge">grid = (⌈58 ÷ 16⌉,) = <b>(4,)</b> · 16 lanes per program</div>
+    </div>
+    <div class="sweepread" id="swRead"></div>
+    <p class="note"><code>tl.program_id(0)</code> is <code>blockIdx.x</code>. <code>tl.arange(0, BLOCK)</code>
+       materializes <code>[0…15]</code> as a vector. Every "variable" below is a 16-wide vector of lanes —
+       the compiler maps them onto threads and issues vectorized loads; you never spell that out.</p>
+  </div>
+</div></section>
+
+<!-- ============ 2. GRID & MASK ============ -->
+<section id="grid"><div class="wrap reveal">
+  <div class="kicker">Section 2 · Interactive</div>
+  <h2><span class="n">02</span>The grid &amp; the mask: <code style="font-size:.8em">triton.cdiv</code> is the whole launch story</h2>
+  <p class="lead">You never size a launch by hand. The grid is one lambda:
+     <code>grid = (triton.cdiv(n, BLOCK),)</code> — ceiling division, so every element is covered and
+     the last program may hang over the edge. The <code>mask</code> turns the overhang into a no-op.
+     Drag <code>n</code> through vocab-sized values and watch the tail.</p>
+
+  <div class="panel">
+    <div class="ctl2">
+      <label>BLOCK — the one knob you actually turn <span class="val" id="gBVal">256</span></label>
+      <div class="presets" id="gBlocks">
+        <button class="preset" data-b="64">64</button>
+        <button class="preset on" data-b="256">256</button>
+        <button class="preset" data-b="512">512</button>
+        <button class="preset" data-b="1024">1024</button>
+        <button class="preset" data-b="2048">2048</button>
+      </div>
+      <label style="margin-top:16px">Vector length n <span class="val" id="gVal">1,000</span></label>
+      <input type="range" id="gRange" min="0" max="1000" value="466">
+      <div class="presets" id="gPresets" style="margin-top:8px">
+        <button class="preset" data-n="1000">1,000</button>
+        <button class="preset" data-n="1025">1,025</button>
+        <button class="preset" data-n="10000">10,000</button>
+        <button class="preset" data-n="50257">50,257 · GPT-2 vocab</button>
+      </div>
+    </div>
+
+    <div class="segs" id="gSegs" style="margin-top:18px"></div>
+    <div class="legend">
+      <span><i style="background:var(--work-dim);border:1px solid rgba(63,185,80,.4)"></i>useful lanes</span>
+      <span><i style="background:rgba(255,144,64,.45)"></i>masked-off tail (idle, not wrong)</span>
+    </div>
+
+    <div class="estats">
+      <div class="estat tri"><b id="gProg">4</b><span>programs launched · ⌈n/BLOCK⌉</span></div>
+      <div class="estat"><b id="gLanes">1024</b><span>lanes of work created · programs × BLOCK</span></div>
+      <div class="estat" id="gMaskedBox"><b id="gMasked">24</b><span>lanes masked off at the tail</span></div>
+      <div class="estat" id="gWasteBox"><b id="gWaste">2.3%</b><span>of launched lanes do nothing</span></div>
+    </div>
+
+    <div class="launchline" id="gLaunch"></div>
+    <div class="verdict v1" id="gVerdict"></div>
+    <p class="note">Why masking is cheap: the masked lanes still <em>occupy</em> their slots (that's the
+       orange), but the loads and stores are predicated off — no out-of-bounds access, no second
+       cleanup kernel. For elementwise work any BLOCK within ~10% of ideal costs nothing measurable;
+       that freedom is what makes fusion easy in Triton.</p>
+  </div>
+</div></section>
+
+<!-- ============ 3. MATMUL ============ -->
+<section id="matmul"><div class="wrap reveal">
+  <div class="kicker">Section 3 · Walkthrough</div>
+  <h2><span class="n">03</span>Inside the tiled matmul: one program, one tile, one loop</h2>
+  <p class="lead">This is where Triton shines. The kernel below is the whole idea: each program owns
+     a <code>BLOCK_M × BLOCK_N</code> tile of C, sweeps K in <code>BLOCK_K</code> chunks, and calls
+     <code>tl.dot</code> into a register-resident accumulator. Step through one program doing its
+     whole life — the picture uses 256×256×256 with 64³ blocks; the chapter bench runs the identical
+     shape at 4096³ with 128×128 tiles.</p>
+
+  <div class="panel">
+    <div class="mm">
+      <pre class="code"><span class="ln" data-i="0"><span class="k">@triton.jit</span></span>
+<span class="ln" data-i="0"><span class="k">def</span> <span class="f">matmul_kernel</span>(a_ptr, b_ptr, c_ptr, M, N, K,</span>
+<span class="ln" data-i="0">        stride_am, stride_ak, stride_bk, stride_bn,</span>
+<span class="ln" data-i="0">        stride_cm, stride_cn,</span>
+<span class="ln" data-i="0">        BLOCK_M: <span class="t">tl.constexpr</span>, BLOCK_N: <span class="t">tl.constexpr</span>,</span>
+<span class="ln" data-i="0">        BLOCK_K: <span class="t">tl.constexpr</span>):</span>
+<span class="ln" data-i="1">    pid_m = tl.<span class="f">program_id</span>(<span class="n">0</span>)</span>
+<span class="ln" data-i="1">    pid_n = tl.<span class="f">program_id</span>(<span class="n">1</span>)</span>
+<span class="ln" data-i="1">    offs_m = pid_m * BLOCK_M + tl.<span class="f">arange</span>(<span class="n">0</span>, BLOCK_M)</span>
+<span class="ln" data-i="1">    offs_n = pid_n * BLOCK_N + tl.<span class="f">arange</span>(<span class="n">0</span>, BLOCK_N)</span>
+<span class="ln" data-i="1">    acc = tl.<span class="f">zeros</span>((BLOCK_M, BLOCK_N), dtype=<span class="t">tl.float32</span>)</span>
+<span class="ln" data-i="2">    <span class="k">for</span> k <span class="k">in</span> <span class="f">range</span>(<span class="n">0</span>, K, BLOCK_K):</span>
+<span class="ln" data-i="2">        offs_k = k + tl.<span class="f">arange</span>(<span class="n">0</span>, BLOCK_K)</span>
+<span class="ln" data-i="3">        a = tl.<span class="f">load</span>(a_ptr + offs_m[:, <span class="k">None</span>] * stride_am</span>
+<span class="ln" data-i="3">                        + offs_k[<span class="k">None</span>, :] * stride_ak)</span>
+<span class="ln" data-i="3">        b = tl.<span class="f">load</span>(b_ptr + offs_k[:, <span class="k">None</span>] * stride_bk</span>
+<span class="ln" data-i="3">                        + offs_n[<span class="k">None</span>, :] * stride_bn)</span>
+<span class="ln" data-i="4">        acc += tl.<span class="f">dot</span>(a, b)   <span class="c"># ← the tensor cores live here</span></span>
+<span class="ln" data-i="5">    tl.<span class="f">store</span>(c_ptr + offs_m[:, <span class="k">None</span>] * stride_cm</span>
+<span class="ln" data-i="5">                  + offs_n[<span class="k">None</span>, :] * stride_cn,</span>
+<span class="ln" data-i="5">             acc.<span class="f">to</span>(<span class="t">tl.float16</span>))</span></pre>
+
+      <div>
+        <div class="mrow">
+          <div class="mgcol"><div class="mmt" id="gA"></div><div class="eqlab">A · M×K · one 64×64 tile hot</div></div>
+          <div class="mmop">×</div>
+          <div class="mgcol"><div class="mmt" id="gB"></div><div class="eqlab">B · K×N · the matching k-slice</div></div>
+          <div class="mmop">=</div>
+          <div class="mgcol"><div class="mmt wide click" id="gC"></div><div class="eqlab">C · click any tile to reassign the program</div></div>
+        </div>
+        <div class="minis" id="gMini"></div>
+        <div class="eqlab" style="text-align:center" id="gMiniLab">the whole grid · 16 programs — green = finished</div>
+        <div class="mprog"><div class="fill" id="gAccFill"></div></div>
+        <div class="mm-ctl">
+          <button class="btn" id="mPrev">‹ Prev</button>
+          <button class="btn primary" id="mPlay">▶ Auto</button>
+          <button class="btn" id="mNext">Next ›</button>
+          <span class="msteplbl" id="mStepLbl"></span>
+        </div>
+        <div class="mcap" id="mCap"></div>
+        <div class="mchips">
+          <span class="mchip">per tl.dot: <b>64·64·64 = 524k FLOPs</b></span>
+          <span class="mchip">acc: <b>64×64 fp32 = 16 KB of registers</b></span>
+          <span class="mchip">K-iters: <b id="mKIter">0 / 4</b></span>
+        </div>
+      </div>
+    </div>
+
+    <p class="note">Real shapes: 4096³ with BLOCK 128×128×32 → grid (32, 32) = <b>1,024 programs</b> ×
+       32 K-iterations each, all resident at once across 132 SMs. The mask-free version shown here
+       assumes M, N, K divide evenly; production kernels pass <code>mask=</code> to the loads/stores
+       exactly like the vector kernel of section 01. And <code>tl.dot</code> won't use tensor cores
+       below 16 in any dimension — keep blocks at 16³ or larger.</p>
+  </div>
+</div></section>
+
+<!-- ============ 4. LOWERING ============ -->
+<section id="lowering"><div class="wrap reveal">
+  <div class="kicker">Section 4</div>
+  <h2><span class="n">04</span>What <code style="font-size:.8em">tl.dot</code> becomes: the compiler's half of the bargain</h2>
+  <p class="lead">You wrote ~30 lines of block-level Python. The Triton compiler (through its own IRs
+     down to LLVM and PTX) emits everything the <a href="../tensor-cores/tensor-cores.html">WMMA chapter</a>
+     made you write by hand. Click a chip to see which piece it takes over.</p>
+
+  <div class="panel">
+    <div class="flow">
+      <div class="fnode"><b>@triton.jit</b><span>blocks &amp; ops,<br>Python source</span></div>
+      <div class="farr">→</div>
+      <div class="fnode"><b>TTIR</b><span>block-level IR,<br>no layouts yet</span></div>
+      <div class="farr">→</div>
+      <div class="fnode"><b>TTGIR</b><span>+ layouts, swizzles,<br>shared memory</span></div>
+      <div class="farr">→</div>
+      <div class="fnode"><b>LLVM IR</b><span>+ pipelining,<br>async copies</span></div>
+      <div class="farr">→</div>
+      <div class="fnode last"><b>PTX → SASS</b><span>mma.sync · cp.async<br>ldmatrix</span></div>
+    </div>
+
+    <div class="pair" style="margin-top:18px">
+      <div>
+        <div class="codecap">You write</div>
+        <pre class="code">offs = pid * BLOCK + tl.<span class="f">arange</span>(<span class="n">0</span>, BLOCK)
+a = tl.<span class="f">load</span>(a_ptr + offs_m[:, <span class="k">None</span>] * <span class="n">sam</span>
+                + offs_k[<span class="k">None</span>, :] * <span class="n">sak</span>)
+b = tl.<span class="f">load</span>(b_ptr + <span class="c"># …same idea…</span>)
+acc += tl.<span class="f">dot</span>(a, b)      <span class="c"># that's it. that's the tweet</span></pre>
+      </div>
+      <div>
+        <div class="codecap">The compiler emits (PTX, abridged)</div>
+        <pre class="code"><span class="c">// coalesced 128-bit global → shared, async</span>
+cp.async.cg.shared.global [<span class="t">smem_a</span>], [<span class="t">gA</span>], <span class="n">16</span>;
+<span class="c">// conflict-free swizzled staging, warp-wide</span>
+ldmatrix.sync.aligned.m8n8.x4.shared.b16
+    {<span class="t">%f0</span>,<span class="t">%f1</span>,<span class="t">%f2</span>,<span class="t">%f3</span>}, [<span class="t">smem_a</span>];
+<span class="c">// the tensor core itself — one of hundreds</span>
+mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+    {<span class="t">%acc0</span>,<span class="t">%acc1</span>}, {<span class="t">%f0</span>,<span class="t">%f1</span>}, {<span class="t">%f4</span>}, {<span class="t">%acc0</span>,<span class="t">%acc1</span>};</pre>
+      </div>
+    </div>
+
+    <div class="autochips" id="autoChips">
+      <button class="autochip on" data-d="0">Memory coalescing</button>
+      <button class="autochip" data-d="1">Shared memory &amp; multibuffering</button>
+      <button class="autochip" data-d="2">Conflict-free swizzles</button>
+      <button class="autochip" data-d="3">mma.sync selection</button>
+      <button class="autochip" data-d="4">Software pipelining</button>
+      <button class="autochip" data-d="5">Threads &amp; launches</button>
+    </div>
+    <div class="autodetail" id="autoDetail"></div>
+    <p class="note">Every stage is printable, which is half the fun:
+       <code>compiled = triton.compile(...); compiled.asm["ptx"]</code>, or set
+       <code>TRITON_KERNEL_DUMP=1</code> and read the TTGIR to see the swizzled layouts by name.
+       When a Triton kernel is mysteriously slow, the answer is usually visible in the IR — a
+       fallback off the mma path, or a layout conversion inserted where you didn't want one.</p>
+  </div>
+</div></section>
+
+<!-- ============ 5. THE 83% GAP ============ -->
+<section id="gap"><div class="wrap reveal">
+  <div class="kicker">Section 5 · Interactive</div>
+  <h2><span class="n">05</span>The 83% gap: where Triton's points come from</h2>
+  <p class="lead">Same GPU, same 4096×4096 fp16 matmul: <b>Triton 573 TFLOPS, cuBLAS 688</b>. The gap
+     isn't mysterious — it's mostly the <em>block configuration</em>. Bigger tiles mean more reuse per
+     byte fetched from HBM; deeper <code>num_stages</code> means the loads stay ahead of the math.
+     Pick a config and watch both effects move the estimate.</p>
+
+  <div class="panel">
+    <h3 style="margin:0 0 4px;font-size:16px">Measured — the chapter bench</h3>
+    <div class="cmp">
+      <div class="lbl"><b>573 TFLOPS</b>Triton matmul</div>
+      <div><div class="tbar"><div class="fill tri" data-w="573"></div></div></div>
+    </div>
+    <div class="cmp">
+      <div class="lbl"><b>688 TFLOPS</b>cuBLAS · torch.mm</div>
+      <div><div class="tbar"><div class="fill nv" data-w="688"></div></div>
+        <div class="ticks"><span>0</span><span>175</span><span>350</span><span>525</span><span>700 TFLOPS</span></div></div>
+    </div>
+    <p class="note">H100 SXM, 4096×4096×4096, fp16 in / fp32 accumulate. Both numbers improve with
+       tuning — production stacks autotune for their exact shapes.</p>
+  </div>
+
+  <div class="panel" style="margin-top:14px">
+    <div class="presets" id="cfgPresets">
+      <button class="preset" data-c="toy">toy · 16×16×16</button>
+      <button class="preset" data-c="small">small · 32×32×32</button>
+      <button class="preset" data-c="decent">decent · 64×64×32</button>
+      <button class="preset on" data-c="chapter">chapter · 128×128×32 → 573 measured</button>
+      <button class="preset" data-c="tuned">tuned · 128×128×64</button>
+      <button class="preset" data-c="greedy">greedy · 256×128×64</button>
+    </div>
+
+    <div class="selrow">
+      <label>BLOCK_M <span class="sv" id="sBm">128</span><select id="selBm">
+        <option>16</option><option>32</option><option>64</option><option selected>128</option><option>256</option></select></label>
+      <label>BLOCK_N <span class="sv" id="sBn">128</span><select id="selBn">
+        <option>16</option><option>32</option><option>64</option><option selected>128</option><option>256</option></select></label>
+      <label>BLOCK_K <span class="sv" id="sBk">32</span><select id="selBk">
+        <option>16</option><option>32</option><option selected>32</option><option>64</option><option>128</option></select></label>
+      <label>num_warps <span class="sv" id="sW">8</span><select id="selW">
+        <option>4</option><option selected>8</option></select></label>
+      <label>num_stages <span class="sv" id="sS">3</span><select id="selS">
+        <option>2</option><option selected>3</option><option>4</option><option>5</option><option>6</option></select></label>
+    </div>
+
+    <div class="gstats">
+      <div class="estat tri"><b id="cAi">64</b><span>FLOPs per HBM byte · BM·BN/(BM+BN) — the reuse story</span></div>
+      <div class="estat" id="cSmemBox"><b id="cSmem">16 KB</b><span>shared mem per stage · stages that fit: <span id="cMaxSt">7</span></span></div>
+      <div class="estat"><b id="cGrid">1024</b><span>programs in the grid · <span id="cWaves">7.8</span> waves over 132 SMs</span></div>
+      <div class="estat tri" id="cTfBox"><b id="cTf">573</b><span>TFLOPS · <span id="cTfTag">measured</span></span></div>
+    </div>
+
+    <div style="margin-top:18px">
+      <div class="cmp">
+        <div class="lbl"><b id="cBarVal">573 TFLOPS</b>this config</div>
+        <div><div class="tbar"><div class="fill tri" id="cBarFill"></div></div></div>
+      </div>
+      <div class="cmp">
+        <div class="lbl"><b>688 TFLOPS</b>cuBLAS reference</div>
+        <div><div class="tbar"><div class="fill nv" id="cBarRef"></div></div>
+          <div class="ticks"><span>0</span><span>175</span><span>350</span><span>525</span><span>700 TFLOPS</span></div></div>
+      </div>
+      <div class="verdict v3" id="cVerdict"></div>
+      <div class="legend">
+        <span><i style="background:var(--tri)"></i>measured (chapter bench)</span>
+        <span><i style="background:#2aa89a"></i>model estimate — reuse × pipelining heuristic, calibrated on the two measured points</span>
+        <span><i style="background:#7a4a2b"></i>config won't launch — shared-memory budget blown</span>
+      </div>
+    </div>
+
+    <pre class="code" style="margin-top:18px"><span class="c"># nobody hand-picks one config — you search, per shape, once</span>
+<span class="k">@triton.autotune</span>(
+    configs=[
+        triton.<span class="t">Config</span>({<span class="s">'BLOCK_M'</span>: <span class="n">128</span>, <span class="s">'BLOCK_N'</span>: <span class="n">128</span>, <span class="s">'BLOCK_K'</span>: <span class="n">64</span>}, num_warps=<span class="n">8</span>, num_stages=<span class="n">3</span>),
+        triton.<span class="t">Config</span>({<span class="s">'BLOCK_M'</span>: <span class="n">64</span>,  <span class="s">'BLOCK_N'</span>: <span class="n">128</span>, <span class="s">'BLOCK_K'</span>: <span class="n">32</span>}, num_warps=<span class="n">8</span>, num_stages=<span class="n">4</span>),
+        triton.<span class="t">Config</span>({<span class="s">'BLOCK_M'</span>: <span class="n">64</span>,  <span class="s">'BLOCK_N'</span>: <span class="n">64</span>,  <span class="s">'BLOCK_K'</span>: <span class="n">32</span>}, num_warps=<span class="n">4</span>, num_stages=<span class="n">4</span>),
+    ],
+    key=[<span class="s">'M'</span>, <span class="s">'N'</span>, <span class="s">'K'</span>],   <span class="c"># re-tune when the shape changes</span>
+)
+<span class="k">def</span> <span class="f">matmul_kernel</span>(...):   <span class="c"># first call per shape benchmarks; then it's cached</span></pre>
+
+    <div class="caveat"><b>⚠ Reading the heuristic honestly:</b> the estimate is a teaching model —
+       reuse (AI), a BK sanity nudge, a warp-count fit, and a pipelining factor, scaled to 86% of
+       cuBLAS. It reproduces the <em>shape</em> of the truth: small tiles starve the tensor cores,
+       stages hide HBM latency, and nothing in config-space quite reaches the hand-scheduled
+       original. Real numbers come from <code>@triton.autotune</code> on your hardware.</div>
+  </div>
+</div></section>
+
+<!-- ============ 6. CHOICE ============ -->
+<section id="choice"><div class="wrap reveal">
+  <div class="kicker">Section 6</div>
+  <h2><span class="n">06</span>Triton or CUDA? A decision, not a religion</h2>
+  <p class="lead">Triton took coalescing, shared memory, swizzles, tensor-core issue, pipelining, and
+     thread indices off your plate. That's the short list of what CUDA makes you carry — and also the
+     short list of what CUDA lets you control when the compiler guess is wrong. Choose per kernel,
+     not per project.</p>
+
+  <div class="strats">
+    <div class="strat star">
+      <span class="badge">triton's home turf</span>
+      <h3>Fused ops the libraries don't have</h3>
+      <p>RMSNorm + residual, fused softmax with attention bias, rotary embeddings, quant/dequant
+         around a GEMM, MoE routing glue — anywhere the alternative is four kernels and four round
+         trips through HBM, one Triton kernel is a 2–4× win and an afternoon of work.</p>
+      <div class="mini"><span class="m">load x</span><span class="arr">→</span><span class="m">+residual</span><span class="arr">→</span><span class="m">rsqrt</span><span class="arr">→</span><span class="m">mul</span><span class="arr">→</span><span class="m hi">store · one kernel, one pass</span></div>
+    </div>
+    <div class="strat">
+      <h3>Prototyping that survives to production</h3>
+      <p>FlashAttention started life as a Triton kernel; the tutorial matmul above hits 83% of cuBLAS.
+         Write the thing this afternoon, profile it with nsys/ncu like any other, and port the hot
+         5% to CUDA only if the profile demands it. Most of the time it doesn't.</p>
+      <div class="mini"><span class="m">idea</span><span class="arr">→</span><span class="m hi">Triton today</span><span class="arr">→</span><span class="m">profile</span><span class="arr">→</span><span class="m">CUDA if the profile says so</span></div>
+    </div>
+    <div class="strat cu star">
+      <span class="badge">reach for cuda</span>
+      <h3>Maximum performance &amp; exotic control flow</h3>
+      <p>Persistent kernels, programmatic dependent launch, warp-specialized producer/consumer
+         pipelines, CUTLASS/cute layout algebra, day-one support for a new ISA — the compiler's
+         schedule is good, but a hand-written one still wins the last 10–20% when the math is the
+         product.</p>
+      <div class="mini"><span class="m bad">compiler schedule</span><span class="arr">vs</span><span class="m hi">hand-tuned CUDA · +10–20%</span></div>
+    </div>
+    <div class="strat lib">
+      <span class="badge">neither</span>
+      <h3>If a library already does it, call the library</h3>
+      <p><code>torch.matmul</code> is 688 TFLOPS on this exact shape — beating it is a research
+         project, matching it is wasted effort. cuDNN, flash-attn, and fused encoder kernels cover
+         the stock ops. Triton's edge begins where the library's coverage ends.</p>
+      <div class="mini"><span class="m">stock op?</span><span class="arr">→</span><span class="m hi">cuBLAS / cuDNN / flash-attn</span><span class="arr">→</span><span class="m">done before lunch</span></div>
+    </div>
+  </div>
+
+  <p class="note" style="margin-top:18px">The honest hybrid, and what most inference stacks actually
+     run: cuBLAS for the GEMMs, cuDNN/flash-attn for attention, Triton for the 40 weird fused kernels
+     around them, CUDA for the two nobody could make fast any other way.</p>
+</div></section>
+
+<footer><div class="wrap">
+  <div class="formula">573 ÷ 688 = <b>83%</b> of hand-tuned cuBLAS — the price of never managing a
+    thread is one autotune search</div>
+  <div class="fin">Triton · part of the physics-llm-inference series · prev: <a href="../tensor-cores/tensor-cores.html">tensor cores</a> &amp; shared-memory tiling</div>
+</div></footer>
+
+<script>
+(function(){
+  "use strict";
+  var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  function el(tag, cls, txt){
+    var e = document.createElement(tag);
+    if(cls) e.className = cls;
+    if(txt !== undefined) e.textContent = txt;
+    return e;
+  }
+  function fmt(n){ return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
+
+  /* ---------- reveal on scroll ---------- */
+  var io = new IntersectionObserver(function(es){
+    es.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add("in"); io.unobserve(e.target); } });
+  },{threshold:.12});
+  document.querySelectorAll(".reveal").forEach(function(x){ io.observe(x); });
+
+  /* ---------- 1. sweep ---------- */
+  var N1 = 58, B1 = 16, P1 = 4;
+  var swGrid = document.getElementById("swGrid");
+  var swCells = [];
+  for(var i0=0;i0<P1*B1;i0++){
+    var c0 = el("div","swc",String(i0));
+    c0.title = "element " + i0 + (i0>=N1 ? " — masked off" : "");
+    swGrid.appendChild(c0); swCells.push(c0);
+  }
+  var swLines = document.querySelectorAll("#blocks .ln[data-i]");
+  var swRead = document.getElementById("swRead");
+  var swPlayBtn = document.getElementById("swPlay"), swStepBtn = document.getElementById("swStep"),
+      swResetBtn = document.getElementById("swReset");
+  var swCur = -1, swTimer = null, swPlaying = false;
+
+  function swShow(p){
+    swCur = p;
+    swCells.forEach(function(c,i){
+      var inB = p>=0 && i>=p*B1 && i<(p+1)*B1;
+      var masked = inB && i>=N1;
+      c.className = "swc" + (masked ? " m" : inB ? " on" : "");
+      c.style.transitionDelay = (inB && !reduceMotion) ? ((i - p*B1)*16) + "ms" : "0ms";
+    });
+    swLines.forEach(function(ln){
+      ln.classList.toggle("on", p>=0 || p===-2);
+    });
+    if(p === -2){ /* reduced motion: all at once */
+      swRead.textContent = "";
+      swRead.appendChild(el("span","fx","4 programs × 16 lanes, all resident: pid 0 → [0…15], pid 1 → [16…31], pid 2 → [32…47], pid 3 → [48…63] · 6 lanes masked"));
+      return;
+    }
+    swRead.textContent = "";
+    if(p < 0){
+      swRead.appendChild(el("span","fx","idle — press play: one program's code, four copies, each announced by its pid"));
+      return;
+    }
+    var start = p*B1, end = start+B1-1;
+    swRead.appendChild(el("span","fx","pid = " + p + "  →  offsets = " + p + "×16 + [0…15] = [" + start + "…" + end + "]"));
+    if(p === P1-1){
+      swRead.appendChild(document.createTextNode("  ·  mask = offs < 58 → last 6 lanes load nothing, store nothing"));
+    } else {
+      swRead.appendChild(document.createTextNode("  ·  mask all true ✓ load → add → store, 16 wide"));
+    }
+  }
+  function swTick(){
+    swShow((swCur+1) % P1);
+  }
+  function swStart(){
+    if(swPlaying) return;
+    swPlaying = true; swPlayBtn.textContent = "⏸ Pause";
+    if(reduceMotion){ swShow(-2); return; }
+    swShow(0);
+    swTimer = setInterval(swTick, 1900);
+  }
+  function swStop(){
+    swPlaying = false; swPlayBtn.textContent = "▶ Play";
+    if(swTimer){ clearInterval(swTimer); swTimer = null; }
+  }
+  swPlayBtn.addEventListener("click", function(){ swPlaying ? swStop() : swStart(); });
+  swStepBtn.addEventListener("click", function(){ swStop(); swShow(swCur < 0 ? 0 : (swCur+1) % P1); });
+  swResetBtn.addEventListener("click", function(){ swStop(); swShow(-1); });
+  if(reduceMotion){ swShow(-2); } else { swShow(-1); }
+
+  /* ---------- 2. grid & mask ---------- */
+  var BLOCKS2 = [64,256,512,1024,2048];
+  var gRange = document.getElementById("gRange"), gVal = document.getElementById("gVal"),
+      gBVal = document.getElementById("gBVal"), gSegs = document.getElementById("gSegs"),
+      gProg = document.getElementById("gProg"), gLanes = document.getElementById("gLanes"),
+      gMasked = document.getElementById("gMasked"), gMaskedBox = document.getElementById("gMaskedBox"),
+      gWaste = document.getElementById("gWaste"), gWasteBox = document.getElementById("gWasteBox"),
+      gLaunch = document.getElementById("gLaunch"), gVerdict = document.getElementById("gVerdict");
+  var gBlock = 256, gN = 1000;
+
+  var N_MIN = 32, N_MAX = 50257;
+  function sliderToN(t){ return Math.round(N_MIN * Math.pow(N_MAX/N_MIN, t/1000)); }
+  function nToSlider(n){ return Math.round(1000 * Math.log(n/N_MIN) / Math.log(N_MAX/N_MIN)); }
+
+  function render2(){
+    var n = gN, B = gBlock;
+    gVal.textContent = fmt(n);
+    gBVal.textContent = B;
+    var P = Math.ceil(n/B), lanes = P*B, masked = lanes - n, waste = masked/lanes;
+
+    /* segments: group programs so we never draw more than ~300 boxes */
+    var GROUP = Math.ceil(P/300), shown = Math.ceil(P/GROUP);
+    gSegs.textContent = "";
+    for(var s=0;s<shown;s++){
+      var p0 = s*GROUP, p1 = Math.min(P, (s+1)*GROUP);
+      var seg = el("div","seg");
+      var lanesInSeg = (p1-p0)*B;
+      var valid = Math.max(0, Math.min(lanesInSeg, n - p0*B));
+      seg.style.setProperty("--pw", ((1 - valid/lanesInSeg)*100) + "%");
+      seg.title = "programs " + p0 + "–" + (p1-1) + " · " + fmt(valid) + " / " + fmt(lanesInSeg) + " lanes useful";
+      gSegs.appendChild(seg);
+    }
+
+    gProg.textContent = fmt(P);
+    gLanes.textContent = fmt(lanes);
+    gMasked.textContent = fmt(masked);
+    gMaskedBox.className = "estat " + (waste < 0.05 ? "good" : "bad");
+    gWaste.textContent = (waste*100).toFixed(1) + "%";
+    gWasteBox.className = "estat " + (waste < 0.02 ? "good" : waste < 0.08 ? "" : "bad");
+
+    gLaunch.textContent = "";
+    gLaunch.appendChild(document.createTextNode("add_kernel["));
+    gLaunch.appendChild(el("b",null,"(" + P + ",)"));
+    gLaunch.appendChild(document.createTextNode("](x, y, out, " + fmt(n) + ", BLOCK=" + B + ")   # grid = (triton.cdiv(" + fmt(n) + ", " + B + "),)"));
+
+    /* best-BLOCK suggestion */
+    var best = B, bestW = Infinity;
+    BLOCKS2.forEach(function(b2){
+      var w2 = (Math.ceil(n/b2)*b2 - n) / (Math.ceil(n/b2)*b2);
+      if(w2 < bestW){ bestW = w2; best = b2; }
+    });
+    var v, cls;
+    if(masked === 0){
+      cls = "v1"; v = "Perfectly divisible: " + fmt(n) + " = " + P + " × " + B + ". Not a lane wasted — and not a mask needed.";
+    } else if(waste < 0.02){
+      cls = "v1"; v = "Tail is " + fmt(masked) + " lanes of " + fmt(lanes) + " — " + (waste*100).toFixed(1) + "% slack. The other programs are still busy while these idle, so even this overstates the cost. BLOCK=" + B + " is a good fit.";
+    } else if(waste < 0.08){
+      cls = "v3";
+      v = (bestW < waste - 1e-9)
+        ? "Acceptable: " + (waste*100).toFixed(1) + "% of lanes masked. BLOCK=" + best + " would trim the tail to " + (bestW*100).toFixed(1) + "%. For elementwise fused kernels, either is fine."
+        : "Acceptable: " + (waste*100).toFixed(1) + "% of lanes masked — and every BLOCK on offer rounds up to the same " + fmt(lanes) + " lanes. " + fmt(n) + " just isn't friendly to powers of 2; keep the mask and move on.";
+    } else {
+      cls = "v2";
+      v = (bestW < waste - 1e-9)
+        ? "Overshoot: ⌈" + fmt(n) + " ÷ " + B + "⌉ × " + B + " launches " + (waste*100).toFixed(0) + "% dead lanes. Drop BLOCK to " + best + " (tail → " + (bestW*100).toFixed(1) + "%) — or don't: correctness never depended on it, only a sliver of occupancy."
+        : "Overshoot: ⌈" + fmt(n) + " ÷ " + B + "⌉ × " + B + " launches " + (waste*100).toFixed(0) + "% dead lanes, and no power-of-2 BLOCK does better. Correctness never depended on it — only a sliver of occupancy.";
+    }
+    gVerdict.className = "verdict " + cls;
+    gVerdict.textContent = v;
+
+    document.querySelectorAll("#gBlocks .preset").forEach(function(b){
+      b.classList.toggle("on", parseInt(b.dataset.b,10) === B);
+    });
+    document.querySelectorAll("#gPresets .preset").forEach(function(b){
+      b.classList.toggle("on", parseInt(b.dataset.n,10) === n);
+    });
+  }
+  gRange.addEventListener("input", function(){ gN = sliderToN(parseInt(gRange.value,10)); render2(); });
+  document.querySelectorAll("#gBlocks .preset").forEach(function(b){
+    b.addEventListener("click", function(){ gBlock = parseInt(b.dataset.b,10); render2(); });
+  });
+  document.querySelectorAll("#gPresets .preset").forEach(function(b){
+    b.addEventListener("click", function(){
+      gN = parseInt(b.dataset.n,10);
+      gRange.value = nToSlider(gN);
+      render2();
+    });
+  });
+  gRange.value = nToSlider(gN);
+  render2();
+
+  /* ---------- 3. matmul walkthrough ---------- */
+  var T3 = 4, gAElem = document.getElementById("gA"), gBElem = document.getElementById("gB"),
+      gCElem = document.getElementById("gC"), gMini = document.getElementById("gMini"),
+      mPrevBtn = document.getElementById("mPrev"), mNextBtn = document.getElementById("mNext"),
+      mPlayBtn = document.getElementById("mPlay"), mCap = document.getElementById("mCap"),
+      mStepLbl = document.getElementById("mStepLbl"), mKIter = document.getElementById("mKIter"),
+      gAccFill = document.getElementById("gAccFill"), gMiniLab = document.getElementById("gMiniLab");
+  var tA = [], tB = [], tC = [];
+  for(var r3=0;r3<T3;r3++){
+    tA.push([]); tB.push([]); tC.push([]);
+    for(var q3=0;q3<T3;q3++){
+      var ta = el("div","mt"); gAElem.appendChild(ta); tA[r3].push(ta);
+      var tb = el("div","mt"); gBElem.appendChild(tb); tB[r3].push(tb);
+      var tc = el("div","mt"); tc.appendChild(el("div","fill")); gCElem.appendChild(tc); tC[r3].push(tc);
+    }
+  }
+  var miniEls = [];
+  for(var mi3=0; mi3<T3*T3; mi3++){
+    var mEl = el("div","mi"); gMini.appendChild(mEl); miniEls.push(mEl);
+  }
+
+  var pid = [1,2], mstep = 0, mplaying = false, mtimer = null;
+  var doneSet = {};   // "r-c" → true after this program stored
+
+  function mPhase(s){
+    if(s === 0) return {ph:"setup"};
+    if(s >= 9)  return {ph:"store"};
+    var idx = s-1, k = Math.floor(idx/2);
+    return {ph: (idx%2 === 0) ? "load" : "dot", k:k};
+  }
+  var MM_LINES = { setup:[1], load:[2,3], dot:[4], store:[5] };
+
+  function render3(pulse){
+    var ph = mPhase(mstep);
+    var k = (ph.k !== undefined) ? ph.k : -1;
+    var kDone = ph.ph==="dot" ? k+1 : ph.ph==="store" ? T3 : (ph.ph==="setup" ? 0 : k);
+    if(ph.ph==="store") doneSet[pid[0]+"-"+pid[1]] = true;
+
+    for(var r=0;r<T3;r++) for(var c=0;c<T3;c++){
+      var clsA = "mt", clsB = "mt";
+      if(ph.ph==="load" || ph.ph==="dot"){
+        if(r===pid[0] && c===k) clsA += (ph.ph==="load" ? " hot" : " warm");
+        if(r===k && c===pid[1]) clsB += (ph.ph==="load" ? " hot" : " warm");
+      }
+      tA[r][c].className = clsA;
+      tB[r][c].className = clsB;
+
+      var isSel = (r===pid[0] && c===pid[1]);
+      var clsC = "mt" + (isSel ? " sel" : "");
+      if(ph.ph==="store" && isSel) clsC += " done";
+      if(ph.ph==="dot" && isSel && pulse && !reduceMotion) clsC += " pulse";
+      var fill = isSel ? (kDone/T3*100) : (doneSet[r+"-"+c] ? 100 : 0);
+      tC[r][c].className = clsC;
+      tC[r][c].firstChild.style.height = fill + "%";
+    }
+    for(var i3=0;i3<T3*T3;i3++){
+      var rr = Math.floor(i3/T3), cc = i3%T3;
+      miniEls[i3].className = "mi" + (rr===pid[0]&&cc===pid[1] ? " cur" : "") + (doneSet[rr+"-"+cc] ? " done" : "");
+    }
+    var doneCount = 0; for(var key3 in doneSet) doneCount++;
+    gMiniLab.textContent = "the whole grid · " + (T3*T3) + " programs — green = stored (" + doneCount + " done)";
+
+    document.querySelectorAll("#matmul .ln").forEach(function(ln){
+      var i4 = parseInt(ln.dataset.i,10);
+      ln.classList.toggle("on", MM_LINES[ph.ph].indexOf(i4) !== -1);
+    });
+
+    mStepLbl.textContent = "step " + (mstep+1) + " / 10";
+    mKIter.textContent = kDone + " / " + T3;
+    gAccFill.style.width = (kDone/T3*100) + "%";
+
+    var flops = kDone * 2*64*64*64;
+    var label = ph.ph==="setup" ? "program pid = (" + pid[0] + "," + pid[1] + ")" :
+                ph.ph==="load"  ? "K-iter " + (k+1) + " / " + T3 + " · loading tiles" :
+                ph.ph==="dot"   ? "K-iter " + (k+1) + " / " + T3 + " · tl.dot" :
+                                  "storing tile → global";
+    var capText;
+    if(ph.ph==="setup"){
+      capText = "<b>One program, one tile.</b> grid = (4, 4): sixteen copies of this kernel are running right now, each owning a 64×64 tile of C. This one is pid (" + pid[0] + "," + pid[1] + ") — click any C tile to hand the story to a different program. acc starts as 64×64 fp32 zeros and <b>never leaves registers</b> until the final store.";
+    } else if(ph.ph==="load"){
+      capText = "<b>Iteration " + k + " — feed the cores.</b> tl.load hauls a 64×64 slice of A (this program's rows, the k-chunk) and the matching 64×64 slice of B. You never said <em>where</em> they land: Triton stages them through shared memory, multibuffered num_stages deep, with the addresses coalesced by construction.";
+    } else if(ph.ph==="dot"){
+      capText = "<b>tl.dot — the whole tile at once.</b> 64×64×64 = 262k multiply-adds retire into acc in one go. On fp16 this is ldmatrix + a storm of mma.sync (section 04). acc accumulates in place; the next iteration's loads are already in flight behind it.";
+    } else {
+      capText = "<b>One store, after the loop.</b> Four tl.dot's later, acc <em>is</em> the C tile — cast to fp16 and written once. This program is done; the other fifteen hit the same milestone on their own clocks. That's the entire GEMM.";
+    }
+    mCap.innerHTML = capText;
+    mCap.insertAdjacentHTML("beforeend", "");
+  }
+  function mGoto(s){ mstep = Math.max(0, Math.min(9, s)); render3(false); }
+  function mAdvance(){
+    if(mstep < 9){ mGoto(mstep+1); render3(true); }
+    else { doneSet = {}; mGoto(0); }
+  }
+  function mStart(){
+    if(mplaying || reduceMotion) return;
+    mplaying = true; mPlayBtn.textContent = "⏸ Pause";
+    mtimer = setInterval(mAdvance, 1500);
+  }
+  function mStop(){
+    mplaying = false; mPlayBtn.textContent = "▶ Auto";
+    if(mtimer){ clearInterval(mtimer); mtimer = null; }
+  }
+  mPrevBtn.addEventListener("click", function(){ mStop(); mGoto(mstep-1); });
+  mNextBtn.addEventListener("click", function(){ mStop(); mstep<9 ? (mGoto(mstep+1), render3(true)) : mGoto(9); });
+  mPlayBtn.addEventListener("click", function(){ mplaying ? mStop() : mStart(); });
+  gCElem.addEventListener("click", function(ev){
+    var tiles = gCElem.children, idx = -1;
+    for(var i5=0;i5<tiles.length;i5++){ if(tiles[i5] === ev.target || tiles[i5].contains(ev.target)) idx = i5; }
+    if(idx < 0) return;
+    pid = [Math.floor(idx/T3), idx%T3];
+    mStop(); mGoto(0);
+  });
+  gMini.addEventListener("click", function(ev){
+    var idx = miniEls.indexOf(ev.target);
+    if(idx < 0) return;
+    pid = [Math.floor(idx/T3), idx%T3];
+    mStop(); mGoto(0);
+  });
+  if(reduceMotion){ doneSet[pid[0]+"-"+pid[1]] = true; mstep = 9; }
+  render3(false);
+
+  /* ---------- 4. lowering chips ---------- */
+  var AUTO_DETAIL = [
+    "<b>Memory coalescing.</b> You wrote one flat <code>tl.arange</code>; the compiler proves the block's lanes touch contiguous fp16s and emits 128-bit vectorized loads (<code>ld.global.v4</code>, or async <code>cp.async</code> when feeding tl.dot). The coalescing analysis from the memory chapter, derived from your access pattern instead of hand-enforced.",
+    "<b>Shared memory &amp; multibuffering.</b> Tensor cores can't sip from L2 at full rate, so tl.dot operands route through shared memory. <code>num_stages=3</code> means two tiles are being prefetched while the third computes — you set one integer and the double-buffered pipeline appears in the IR.",
+    "<b>Conflict-free swizzles.</b> A naive shared-memory layout bank-conflicts when a warp reads a column. The TTGIR layout pass assigns each operand a swizzled shared encoding so <code>ldmatrix</code> reads at full rate — the XOR-index tricks of hand-written kernels, chosen automatically per operand.",
+    "<b>mma.sync selection.</b> fp16×fp16 → fp32 accumulate with every dim ≥ 16 lowers to tensor-core instructions: <code>mma.sync.m16n8k16</code> (Ampere/Ada) or Hopper's <code>wgmma</code>. Shrink any dimension below the floor or switch dtype, and it <em>silently</em> falls back to scalar FMA — the classic reason a Triton kernel is mysteriously slow.",
+    "<b>Software pipelining.</b> Your plain Python <code>for</code> loop gets peeled: the async loads for iteration k+1 are issued before iteration k's math retires. It's why <code>num_stages</code> shows up in every Triton config worth copying — and why section 05's estimate rewards it.",
+    "<b>Threads &amp; launches.</b> No <code>threadIdx</code>, no <code>blockDim</code>, no occupancy spreadsheet: <code>num_warps</code> partitions the block's lanes across warps, your grid lambda computes the launch shape, and the runtime compiles, caches, and dispatches per (shape, dtype, config)."
+  ];
+  var autoChips = document.getElementById("autoChips");
+  var autoDetail = document.getElementById("autoDetail");
+  function setAuto(i){
+    document.querySelectorAll("#autoChips .autochip").forEach(function(b){
+      b.classList.toggle("on", parseInt(b.dataset.d,10) === i);
+    });
+    autoDetail.innerHTML = AUTO_DETAIL[i];
+  }
+  autoChips.addEventListener("click", function(ev){
+    var t = ev.target.closest(".autochip");
+    if(t) setAuto(parseInt(t.dataset.d,10));
+  });
+  setAuto(0);
+
+  /* ---------- 5. config explorer ---------- */
+  var CUBLAS = 688, SCALE = 700, SMEM_BUDGET = 227; // KB usable per block on H100
+  var PRESET5 = {
+    toy:    {bm:16,  bn:16,  bk:16, w:4, s:2},
+    small:  {bm:32,  bn:32,  bk:32, w:4, s:2},
+    decent: {bm:64,  bn:64,  bk:32, w:4, s:3},
+    chapter:{bm:128, bn:128, bk:32, w:8, s:3},
+    tuned:  {bm:128, bn:128, bk:64, w:8, s:3},
+    greedy: {bm:256, bn:128, bk:64, w:8, s:4}
+  };
+  var MEASURED5 = 573;
+
+  function cfgModel(bm,bn,bk,w,s){
+    var ai = bm*bn/(bm+bn);
+    var aiF = 0.15 + 0.85*Math.min(1, ai/64);
+    var bkF = bk>=64 ? 1 : (bk>=32 ? 0.96 : 0.90);
+    var idealW = Math.max(4, Math.min(8, Math.round(bm*bn/2048)));
+    var wF = Math.max(0, 1 - 0.45*Math.pow(Math.log2(w/idealW), 2));
+    var smemKB = (bm+bn)*bk*2/1024;
+    var maxSt = Math.floor(SMEM_BUDGET/smemKB);
+    var fits = s <= maxSt;
+    var sF = s>=3 ? 1 : (s===2 ? 0.94 : 0.88);
+    if(maxSt < 3) sF *= 0.90;
+    var tf = fits ? CUBLAS * aiF * bkF * wF * sF * 0.86 : 0;
+    return {ai:ai, smemKB:smemKB, maxSt:maxSt, fits:fits, tf:tf};
+  }
+
+  var selBm = document.getElementById("selBm"), selBn = document.getElementById("selBn"),
+      selBk = document.getElementById("selBk"), selW = document.getElementById("selW"),
+      selS = document.getElementById("selS");
+  var cAi = document.getElementById("cAi"), cSmem = document.getElementById("cSmem"),
+      cMaxSt = document.getElementById("cMaxSt"), cSmemBox = document.getElementById("cSmemBox"),
+      cGrid = document.getElementById("cGrid"), cWaves = document.getElementById("cWaves"),
+      cTf = document.getElementById("cTf"), cTfTag = document.getElementById("cTfTag"),
+      cTfBox = document.getElementById("cTfBox"), cBarFill = document.getElementById("cBarFill"),
+      cBarVal = document.getElementById("cBarVal"), cVerdict = document.getElementById("cVerdict");
+  var sBm = document.getElementById("sBm"), sBn = document.getElementById("sBn"), sBk = document.getElementById("sBk"),
+      sW = document.getElementById("sW"), sS = document.getElementById("sS");
+
+  function render5(){
+    var bm = parseInt(selBm.value,10), bn = parseInt(selBn.value,10), bk = parseInt(selBk.value,10),
+        w = parseInt(selW.value,10), s = parseInt(selS.value,10);
+    sBm.textContent = bm; sBn.textContent = bn; sBk.textContent = bk; sW.textContent = w; sS.textContent = s;
+    var M = cfgModel(bm,bn,bk,w,s);
+    var isChapter = (bm===128 && bn===128 && bk===32 && w===8 && s===3);
+
+    cAi.textContent = M.ai.toFixed(0);
+    cSmem.textContent = (M.smemKB >= 1 ? M.smemKB.toFixed(0) : (M.smemKB*1024).toFixed(0) + " B").replace(/^/, "") + (M.smemKB >= 1 ? " KB" : "");
+    cMaxSt.textContent = M.maxSt;
+    cSmemBox.className = "estat " + (M.fits ? (M.maxSt >= 3 ? "good" : "") : "bad");
+    if(!M.fits) cSmemBox.querySelector("span").innerHTML = "shared mem per stage · <b style='color:var(--oh)'>" + s + " stages need " + (M.smemKB*s).toFixed(0) + " KB &gt; 227 KB</b>";
+    else cSmemBox.querySelector("span").innerHTML = "shared mem per stage · stages that fit: " + M.maxSt;
+
+    var ctas = Math.pow(4096/bm, 2) * (4096/bn===Math.floor(4096/bn) ? 1 : 1);
+    ctas = (4096/bm)*(4096/bn);
+    var waves = ctas/132;
+    cGrid.textContent = fmt(Math.round(ctas));
+    cWaves.textContent = waves.toFixed(1);
+
+    var measured = isChapter;
+    var tf = measured ? MEASURED5 : M.tf;
+    cTf.textContent = measured ? tf : "≈" + Math.round(tf);
+    cTfTag.textContent = measured ? "measured" : M.fits ? "model est. · " + (tf/CUBLAS*100).toFixed(0) + "% of cuBLAS" : "won't launch";
+    cTfBox.className = "estat " + (measured ? "tri" : M.fits ? (tf >= 500 ? "good" : "") : "bad");
+
+    cBarFill.style.width = Math.min(100, tf/SCALE*100) + "%";
+    cBarFill.className = "fill " + (measured ? "tri" : M.fits ? "est" : "dead");
+    cBarFill.textContent = measured ? "573" : M.fits ? "≈" + Math.round(tf) : "";
+    document.getElementById("cBarRef").style.width = (CUBLAS/SCALE*100) + "%";
+    cBarVal.textContent = (measured ? tf : "≈" + Math.round(tf)) + " TFLOPS";
+
+    var v, cls;
+    if(!M.fits){
+      cls = "vbad";
+      v = "Won't launch: " + s + " stages × " + M.smemKB.toFixed(0) + " KB = " + (M.smemKB*s).toFixed(0) + " KB of shared memory, over the 227 KB per-block budget. The tuner would never propose this — num_stages is bounded by the tile you chose.";
+    } else if(tf >= 560){
+      cls = "v3";
+      v = measured
+        ? "573 TFLOPS, measured — 83% of cuBLAS from a 30-line kernel. What's left is Triton's loop overhead and scheduling; CUTLASS-grade warp specialization is the only door past it, and it's a narrow one."
+        : "≈" + Math.round(tf) + " TFLOPS — inside spitting distance of cuBLAS. What's left is Triton's loop overhead and scheduling; CUTLASS-grade warp specialization is the only door past it, and it's a narrow one.";
+    } else if(tf >= 380){
+      cls = "v3";
+      v = "≈" + Math.round(tf) + " TFLOPS — respectable. The tile is big enough to reuse data but the pipeline is leaving bandwidth on the table: try BLOCK_K=64 or +1–2 num_stages (shared memory permitting) before blaming Triton.";
+    } else if(tf >= 150){
+      cls = "v2";
+      v = "≈" + Math.round(tf) + " TFLOPS — the tile is too small. At " + M.ai.toFixed(0) + " FLOPs per HBM byte, every tl.dot re-fetches nearly its own weight in operands. Grow BLOCK_M × BLOCK_N; the reuse is free.";
+    } else {
+      cls = "v2";
+      v = "≈" + Math.round(tf) + " TFLOPS — toy territory: " + bm + "×16-element sub-tiles barely fill one mma, and " + ctas + " programs means " + waves.toFixed(0) + " waves of launch overhead. Great for learning the API; ship the 128² config.";
+    }
+    cVerdict.className = "verdict " + cls;
+    cVerdict.textContent = v;
+
+    document.querySelectorAll("#cfgPresets .preset").forEach(function(b){
+      var p = PRESET5[b.dataset.c];
+      b.classList.toggle("on", p.bm===bm && p.bn===bn && p.bk===bk && p.w===w && p.s===s);
+    });
+  }
+  document.querySelectorAll("#cfgPresets .preset").forEach(function(b){
+    b.addEventListener("click", function(){
+      var p = PRESET5[b.dataset.c];
+      selBm.value = p.bm; selBn.value = p.bn; selBk.value = p.bk; selW.value = p.w; selS.value = p.s;
+      render5();
+    });
+  });
+  [selBm,selBn,selBk,selW,selS].forEach(function(sel){ sel.addEventListener("change", render5); });
+  render5();
+
+  /* fill measured bars when scrolled into view */
+  var gapFilled = false;
+  function fillGap(){
+    if(gapFilled) return; gapFilled = true;
+    document.querySelectorAll("#gap .tbar .fill[data-w]").forEach(function(f){
+      f.style.width = (parseFloat(f.dataset.w)/SCALE*100) + "%";
+    });
+  }
+  if(reduceMotion){ fillGap(); }
+  else{
+    var io3 = new IntersectionObserver(function(es){
+      es.forEach(function(e){ if(e.isIntersecting){ setTimeout(fillGap, 250); io3.disconnect(); } });
+    },{threshold:.4});
+    io3.observe(document.querySelector("#gap .panel"));
+  }
+})();
+</script>
+</body>
+</html>
