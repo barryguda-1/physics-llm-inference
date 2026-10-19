@@ -1,0 +1,1148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FlashInfer — Visual Explainer</title>
+<style>
+  :root{
+    --bg:#0a0e14; --panel:#101722; --panel2:#0c1220; --border:#1e2a3c;
+    --text:#dbe4ee; --muted:#7d8ca0; --faint:#4b5a6e;
+    --oh:#ff9040; --oh-dim:rgba(255,144,64,.16);
+    --work:#3fb950; --work-dim:rgba(63,185,80,.15);
+    --accent:#58a6ff; --purple:#bc8cff; --red:#f85149; --nvidia:#76b900;
+    --mono:"Cascadia Code","JetBrains Mono",Consolas,ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:16px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+       -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 22px}
+  code,.mono{font-family:var(--mono)}
+  a{color:var(--accent)}
+
+  /* ---------- header ---------- */
+  header{padding:64px 0 40px;position:relative;overflow:hidden}
+  header::before{content:"";position:absolute;inset:0;
+    background:
+      radial-gradient(600px 300px at 15% 0%,rgba(88,166,255,.10),transparent 60%),
+      radial-gradient(700px 340px at 85% 10%,rgba(63,185,80,.08),transparent 60%);}
+  header .wrap{position:relative}
+  .kicker{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.16em;text-transform:uppercase}
+  h1{font-size:clamp(28px,5vw,44px);line-height:1.15;margin:10px 0 12px;letter-spacing:-.01em}
+  h1 .hl{color:var(--work)}
+  .sub{color:var(--muted);max-width:780px;font-size:17px}
+  .chips{display:flex;gap:12px;flex-wrap:wrap;margin-top:26px}
+  .chip{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:12px 18px;min-width:150px}
+  .chip b{display:block;font-family:var(--mono);font-size:22px;font-weight:600}
+  .chip span{color:var(--muted);font-size:12.5px}
+  .chip.c1 b{color:var(--work)} .chip.c2 b{color:var(--accent)} .chip.c3 b{color:var(--oh)}
+
+  nav.top{position:sticky;top:0;z-index:50;background:rgba(10,14,20,.88);backdrop-filter:blur(8px);
+          border-bottom:1px solid var(--border)}
+  nav.top .wrap{display:flex;gap:22px;padding:10px 22px;overflow-x:auto}
+  nav.top a{color:var(--muted);text-decoration:none;font-size:13.5px;white-space:nowrap;padding:4px 0}
+  nav.top a:hover{color:var(--text)}
+
+  section{padding:62px 0;border-top:1px solid var(--border)}
+  h2{font-size:26px;margin:6px 0 8px;letter-spacing:-.01em}
+  h2 .n{color:var(--faint);font-family:var(--mono);font-size:18px;margin-right:10px}
+  h3{font-size:16px;margin:0 0 4px}
+  .lead{color:var(--muted);max-width:780px;margin:0 0 28px}
+  .lead code{color:var(--text);background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:1px 6px;font-size:.85em}
+  .lead b{color:var(--text)}
+
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:22px}
+  .note{font-size:12.5px;color:var(--faint);margin-top:12px}
+  .note b{color:var(--muted)}
+
+  pre.code{background:#080d15;border:1px solid var(--border);border-radius:12px;padding:16px 18px;
+           overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.6;margin:18px 0 0}
+  pre.code .k{color:#c586c0} pre.code .f{color:#dcdcaa} pre.code .s{color:#ce9178}
+  pre.code .c{color:#5a7a4a;font-style:italic} pre.code .n{color:#b5cea8} pre.code .t{color:#4ec9b0}
+  .code-hint{color:var(--faint);font-size:12px;margin:8px 2px 0}
+
+  /* shared controls */
+  .mctl{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:14px}
+  .btn{background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:9px;
+       padding:8px 16px;font-size:13.5px;cursor:pointer;transition:.2s;font-family:inherit}
+  .btn:hover{border-color:var(--accent)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#08111e;font-weight:700}
+  .btn:disabled{opacity:.4;cursor:default}
+  .btn:disabled:hover{border-color:var(--border)}
+  .kbadge{font-family:var(--mono);font-size:12.5px;color:var(--muted);
+          border:1px solid var(--border);border-radius:999px;padding:5px 14px}
+  .kbadge b{color:var(--oh)} .kbadge b.good{color:var(--work)}
+  .steplbl{font-family:var(--mono);font-size:12.5px;color:var(--muted);margin-left:auto}
+  .presets{display:flex;gap:8px;flex-wrap:wrap}
+  .preset{background:var(--panel2);border:1px solid var(--border);color:var(--muted);border-radius:999px;
+          padding:5px 14px;font-size:12.5px;cursor:pointer;font-family:var(--mono);transition:.2s}
+  .preset:hover{color:var(--text);border-color:var(--accent)}
+  .preset.on{color:#08111e;background:var(--accent);border-color:var(--accent);font-weight:700}
+  .ctl label{display:block;font-size:13px;color:var(--muted);margin:14px 0 4px}
+  .ctl .val{float:right;font-family:var(--mono);color:var(--text)}
+  input[type=range]{width:100%;accent-color:var(--oh);height:26px}
+  .verdict{margin-top:14px;padding:12px 16px;border-radius:10px;background:var(--panel2);
+           border-left:3px solid var(--faint);font-size:14px}
+  .verdict.v1{border-color:var(--work);color:#7ee2a0}
+  .verdict.v2{border-color:#d29922;color:#e3b341}
+  .verdict.v3{border-color:var(--oh);color:#ffa96b}
+  .mread{margin-top:14px;font-size:13.5px;color:var(--muted);background:var(--panel2);
+         border:1px solid var(--border);border-radius:10px;padding:12px 16px}
+  .mread b{color:var(--text)}
+
+  .reveal{opacity:0;transform:translateY(16px);transition:opacity .6s ease,transform .6s ease}
+  .reveal.in{opacity:1;transform:none}
+  @media (prefers-reduced-motion:reduce){.reveal{opacity:1;transform:none;transition:none}}
+
+  /* ---------- 1. broken assumptions ---------- */
+  .prob4{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .prob{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:18px;min-width:0}
+  .prob .tag{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+             color:var(--oh);display:block;margin-bottom:6px}
+  .prob p{margin:6px 0 0;font-size:13.8px;color:var(--muted)}
+  .prob p b{color:var(--text)}
+  .minibox{margin-top:14px;padding-top:12px;border-top:1px dashed var(--border)}
+  .mb{display:flex;gap:0;height:9px;margin:5px 0}
+  .mb i{border-radius:3px 0 0 3px}
+  .mb u{flex:1;border-radius:0 3px 3px 0;
+        background:repeating-linear-gradient(45deg,rgba(248,81,73,.30) 0 4px,transparent 4px 8px)}
+  .mini-cap{font-family:var(--mono);font-size:11.5px;color:var(--faint);margin-top:8px}
+  .mini-pages{display:flex;gap:3px}
+  .mini-pages i{width:16px;height:16px;border-radius:4px;background:var(--panel);border:1px solid var(--border)}
+  .mini-shapes{display:flex;align-items:flex-end;gap:14px}
+  .mini-shapes .sq{width:46px;height:46px;border-radius:6px;
+        background:repeating-linear-gradient(45deg,rgba(188,140,255,.25) 0 5px,transparent 5px 10px);
+        border:1px solid var(--border);display:flex;align-items:center;justify-content:center;
+        font-family:var(--mono);font-size:10.5px;color:var(--muted)}
+  .mini-shapes .sl{width:46px;height:9px;border-radius:3px;background:rgba(188,140,255,.4);
+        display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:10px;color:var(--text)}
+  .mini-text{font-family:var(--mono);font-size:12px;color:var(--muted)}
+  @media (max-width:760px){.prob4{grid-template-columns:1fr}}
+
+  /* ---------- 2. ragged ---------- */
+  .rg-rows{margin-top:18px;display:flex;flex-direction:column;gap:9px}
+  .rg-row{display:grid;grid-template-columns:104px 1fr;gap:12px;align-items:center}
+  .rg-lab{font-family:var(--mono);font-size:12px;color:var(--muted);text-align:right}
+  .rg-track{height:20px;position:relative;background:var(--panel2);
+            border:1px solid var(--border);border-radius:6px;overflow:hidden}
+  .rg-fill{position:absolute;top:0;bottom:0;left:0;border-radius:5px 0 0 5px;transition:width .4s}
+  .rg-pad{position:absolute;top:0;bottom:0;right:0;
+          background:repeating-linear-gradient(45deg,rgba(248,81,73,.30) 0 4px,transparent 4px 8px)}
+  .rg-flatwrap{margin-top:20px}
+  .rg-flat{display:flex;height:26px;border-radius:7px;overflow:hidden;gap:2px}
+  .rg-flat i{transition:width .4s}
+  .iprow{margin-top:12px;font-family:var(--mono);font-size:13px;color:var(--muted)}
+  .iprow b{color:var(--text);font-weight:500}
+  .iprow .seg{display:inline-block;padding:2px 9px;border-radius:6px;margin:0 2px;
+              background:var(--panel);border:1px solid var(--border)}
+  .iprow .seg b{font-weight:600}
+  .rg-flatlab{font-family:var(--mono);font-size:12px;color:var(--faint);margin-bottom:8px}
+  @media (max-width:560px){.rg-row{grid-template-columns:78px 1fr}.rg-lab{font-size:11px}}
+
+  /* ---------- 3. paged ---------- */
+  .pmwrap{display:grid;grid-template-columns:auto 1fr;gap:26px;align-items:start}
+  .pmlab{font-family:var(--mono);font-size:12px;color:var(--faint);margin-bottom:8px}
+  .pmem{display:grid;grid-template-columns:repeat(8,27px);grid-auto-rows:27px;gap:3px}
+  .pcell{border-radius:6px;background:var(--panel2);border:1px solid var(--border);transition:background .3s}
+  .pcell.just{outline:2px solid rgba(255,255,255,.35);outline-offset:-2px}
+  .pglegend{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px}
+  .lchip{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11.5px;color:var(--muted);
+         border:1px solid var(--border);border-radius:999px;padding:3px 10px}
+  .lchip i{width:10px;height:10px;border-radius:3px;display:inline-block}
+  .lchip i.free{background:var(--panel2);border:1px solid var(--border)}
+  .pgstats{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  .prow{display:grid;grid-template-columns:14px 22px 150px 1fr;gap:10px;align-items:center;
+        background:var(--panel2);border:1px solid var(--border);border-radius:9px;padding:8px 12px;
+        font-family:var(--mono);font-size:12.5px;margin-bottom:6px}
+  .prow .pdot{width:14px;height:14px;border-radius:4px;display:inline-block}
+  .prow .pname{color:var(--text);font-weight:600}
+  .prow .plen{color:var(--muted)}
+  .prow .pkv{color:var(--muted);text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pmap{display:flex;gap:5px;flex-wrap:wrap;margin:-2px 0 10px 36px}
+  .pmap span{font-family:var(--mono);font-size:11.5px;color:var(--muted);
+             background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:2px 8px}
+  .pmap span b{color:var(--text);font-weight:600}
+  @media (max-width:820px){.pmwrap{grid-template-columns:1fr}
+    .prow{grid-template-columns:14px 22px 1fr;grid-template-rows:auto auto}
+    .prow .pkv{grid-column:1 / -1;text-align:left;white-space:normal}}
+
+  /* ---------- 4. phases ---------- */
+  .shapes{display:flex;gap:22px;flex-wrap:wrap;margin-top:6px}
+  .pdiag{flex:1;min-width:290px;border:1px dashed var(--border);border-radius:12px;padding:16px;
+         transition:opacity .3s,border-color .3s}
+  .pdiag.off{opacity:.32}
+  .pdiag.live{border-color:var(--accent)}
+  .pdiag h3{font-size:13.5px;font-family:var(--mono);font-weight:500}
+  .pdiag h3 span{color:var(--faint);font-weight:400}
+  .blkrow{display:flex;align-items:flex-end;gap:10px;margin-top:16px;height:132px}
+  .blk{border-radius:6px;display:flex;align-items:center;justify-content:center;
+       font-family:var(--mono);font-size:10.5px;color:var(--text);text-align:center;line-height:1.3}
+  .blk .dim{display:block;font-size:9.5px;color:var(--muted);margin-top:2px}
+  .blk.q{background:rgba(88,166,255,.35);border:1px solid rgba(88,166,255,.5)}
+  .blk.kv{background:rgba(188,140,255,.30);border:1px solid rgba(188,140,255,.45)}
+  .blk.s{background:repeating-linear-gradient(45deg,rgba(125,140,160,.18) 0 5px,transparent 5px 10px);
+         border:1px dashed var(--border);color:var(--muted)}
+  .blk.o{background:rgba(63,185,80,.30);border:1px solid rgba(63,185,80,.5)}
+  .bcap{font-size:12.5px;color:var(--muted);margin-top:12px}
+  .bcap b{color:var(--text)}
+  .gauge{margin-top:26px}
+  .gt-label{font-size:13px;color:var(--muted);margin-bottom:26px}
+  .gtrack{position:relative;height:42px;background:var(--panel2);border:1px solid var(--border);border-radius:9px}
+  .gridge{position:absolute;top:0;bottom:0;width:2px;background:#d29922}
+  .gridge span{position:absolute;top:-19px;transform:translateX(-50%);font-family:var(--mono);
+               font-size:11px;color:#e3b341;white-space:nowrap}
+  .gmark{position:absolute;top:13px;width:10px;height:16px;border-radius:3px;transform:translateX(-50%);transition:left .45s}
+  .gmark.dec{background:var(--oh)} .gmark.pre{background:var(--work)}
+  .glab{position:absolute;top:100%;margin-top:7px;transform:translateX(-50%);font-family:var(--mono);
+        font-size:11px;color:var(--muted);white-space:nowrap}
+  .gscale{display:flex;justify-content:space-between;color:var(--faint);font-family:var(--mono);
+          font-size:11px;margin-top:24px;padding:0 2px}
+
+  /* ---------- 5. bench ---------- */
+  .bench{display:flex;flex-direction:column;gap:18px;margin-top:6px}
+  .bhead{display:flex;align-items:baseline;gap:12px;margin-bottom:8px}
+  .bhead b{font-family:var(--mono);font-size:14px}
+  .bhead .sub2{color:var(--faint);font-size:12px;font-family:var(--mono)}
+  .spd{margin-left:auto;font-family:var(--mono);font-size:13px;color:var(--work);
+       background:var(--work-dim);border-radius:999px;padding:3px 12px}
+  .spd.tie{color:var(--muted);background:var(--panel2)}
+  .brow{display:grid;grid-template-columns:84px 1fr 52px;gap:10px;align-items:center;margin:4px 0}
+  .brow .bl{font-family:var(--mono);font-size:12px;color:var(--muted);text-align:right}
+  .bar{height:20px;position:relative;background:var(--panel2);border:1px solid var(--border);border-radius:6px;overflow:hidden}
+  .bar i{position:absolute;left:0;top:0;bottom:0;border-radius:5px 0 0 5px}
+  .bar.dim i{background:rgba(125,140,160,.55)}
+  .bar.good i{background:rgba(63,185,80,.8)}
+  .bval{font-family:var(--mono);font-size:12.5px;color:var(--text)}
+  @media (max-width:560px){.brow{grid-template-columns:64px 1fr 44px}.brow .bl{font-size:11px}}
+
+  /* ---------- 6. integration ---------- */
+  .iow{display:grid;grid-template-columns:1.15fr 1fr;gap:20px;align-items:start}
+  .iow pre.code{margin:0;font-size:12.5px}
+  .iow pre.code .ln{display:block;padding:2px 8px;margin:0 -8px;border-left:3px solid transparent;
+                    border-radius:5px;transition:background .25s,border-color .25s}
+  .iow pre.code .ln.on{background:rgba(88,166,255,.09);border-left-color:var(--accent)}
+  .ledger{display:flex;flex-direction:column;gap:6px}
+  .lrow{display:grid;grid-template-columns:1fr 58px 96px;gap:10px;align-items:center;
+        background:var(--panel2);border:1px solid var(--border);border-radius:9px;padding:8px 12px;
+        font-family:var(--mono);font-size:12px;opacity:.28;transition:opacity .3s}
+  .lrow.on{opacity:1}
+  .lrow .lnm{color:var(--text)}
+  .lrow .lop{text-align:center;border-radius:6px;padding:2px 0;color:var(--faint)}
+  .lrow .lop.once{background:rgba(75,90,110,.22)}
+  .lrow .lop.cpu{color:var(--accent);background:rgba(88,166,255,.13)}
+  .lrow .lop.gpu{color:var(--work);background:var(--work-dim)}
+  .lrow .lcv{color:var(--muted);text-align:right}
+  @media (max-width:820px){.iow{grid-template-columns:1fr}}
+
+  /* ---------- 7. habits ---------- */
+  .strats{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:6px}
+  .strat{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:18px}
+  .strat h3{font-size:15.5px;margin-bottom:6px}
+  .strat p{margin:0;font-size:13.5px;color:var(--muted)}
+  .strat p b{color:var(--text)}
+  .strat p code{color:var(--text);background:var(--panel);border:1px solid var(--border);
+                border-radius:5px;padding:1px 6px;font-size:.85em}
+  .mini{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px;
+        font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .mini .m{background:var(--panel);border:1px solid var(--border);border-radius:7px;padding:4px 10px}
+  .mini .m.hi{color:#7ee2a0;border-color:rgba(63,185,80,.4)}
+  .mini .m.bad{color:#ffa96b;border-color:rgba(255,144,64,.4)}
+  .mini .arr{color:var(--faint)}
+  @media (max-width:760px){.strats{grid-template-columns:1fr}}
+
+  /* sequence colors — shared by every section; kept last so they win the cascade
+     over component backgrounds (.pcell etc.) */
+  .sa{background:rgba(88,166,255,.65)} .sb{background:rgba(255,144,64,.65)}
+  .sc{background:rgba(63,185,80,.65)}  .sd{background:rgba(188,140,255,.65)}
+  .se{background:rgba(248,81,73,.65)}
+
+  /* ---------- 8. news ---------- */
+  .news{display:flex;flex-direction:column;gap:12px}
+  .nrow{display:grid;grid-template-columns:86px 96px 1fr;gap:16px;align-items:start;
+        background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:14px 18px}
+  .nrow .nv{font-family:var(--mono);font-size:15px;font-weight:600;color:var(--accent)}
+  .nrow .nd{font-family:var(--mono);font-size:12px;color:var(--faint);padding-top:3px;white-space:nowrap}
+  .nrow ul{margin:0;padding-left:18px;font-size:13.5px;color:var(--muted)}
+  .nrow li{margin:4px 0}
+  .nrow li b{color:var(--text);font-weight:500}
+  .nrow code{color:var(--text);background:var(--panel);border:1px solid var(--border);
+             border-radius:5px;padding:1px 6px;font-size:.85em}
+  @media (max-width:700px){.nrow{grid-template-columns:1fr;gap:4px}.nrow .nd{padding:0}}
+
+  footer{padding:56px 0 72px;border-top:1px solid var(--border)}
+  .formula{font-family:var(--mono);font-size:15px;color:var(--muted);text-align:center;line-height:1.9}
+  .formula b{color:var(--text);font-weight:600}
+  .fin{text-align:center;color:var(--faint);font-size:12.5px;margin-top:18px}
+</style>
+</head>
+<body>
+
+<!-- ============ HEADER ============ -->
+<header><div class="wrap">
+  <div class="kicker">physics-llm-inference · kernel libraries</div>
+  <h1>FlashInfer: attention built for <span class="hl">serving</span>, not training</h1>
+  <p class="sub">FlashAttention won by refusing to materialize the N×N matrix — for training-shaped
+     batches: fixed size, same length, contiguous tensors. A serving engine produces none of those.
+     FlashInfer is the kernel layer built for the shapes inference actually produces:
+     <b>ragged batches, paged KV caches, one token at a time</b>.</p>
+  <div class="chips">
+    <div class="chip c1"><b>4.1×</b><span>batch decode vs SDPA · H100, B = 32</span></div>
+    <div class="chip c2"><b>0</b><span>padding cells in a ragged batch</span></div>
+    <div class="chip c3"><b>≤ 1 page</b><span>KV memory wasted per request</span></div>
+  </div>
+</div></header>
+
+<nav class="top"><div class="wrap">
+  <a href="#why">01 why</a><a href="#ragged">02 ragged</a><a href="#paged">03 paged</a>
+  <a href="#phases">04 phases</a><a href="#bench">05 benchmark</a><a href="#api">06 integration</a>
+  <a href="#habits">07 habits</a><a href="#news">08 news</a>
+</div></nav>
+
+<!-- ============ 1. WHY ============ -->
+<section id="why"><div class="wrap reveal">
+  <div class="kicker">Section 1 · The setup</div>
+  <h2><span class="n">01</span>Four assumptions, broken by production</h2>
+  <p class="lead">FlashAttention was designed for training. Training batches are rectangles:
+     B sequences × the same length, one contiguous KV tensor, every launch dense.
+     Inference violates each assumption — and each violation has a bill.</p>
+
+  <div class="prob4">
+    <div class="prob">
+      <span class="tag">broken · shape</span>
+      <h3>Variable sequence lengths</h3>
+      <p>Requests arrive with 50 or 5,000 tokens of context. Dense kernels want a rectangle,
+         so the batch is padded to its longest request: the mask hides the ghost cells from
+         the softmax, but the memory is allocated and the kernel still walks them.</p>
+      <div class="minibox">
+        <div class="mb"><i class="sa" style="width:14%"></i><u></u></div>
+        <div class="mb"><i class="sb" style="width:57%"></i><u></u></div>
+        <div class="mb"><i class="sc" style="width:7%"></i><u></u></div>
+        <div class="mb"><i class="sd" style="width:100%"></i></div>
+        <div class="mini-cap">padded to max → 55% of this batch is ghost</div>
+      </div>
+    </div>
+    <div class="prob">
+      <span class="tag">broken · layout</span>
+      <h3>Paged KV cache</h3>
+      <p>PagedAttention stores each request's cache in small blocks scattered across HBM —
+         that's what kills the O(B · max_len) pre-allocation. But standard attention kernels
+         can't even index it: they expect one contiguous tensor per sequence.</p>
+      <div class="minibox">
+        <div class="mini-pages">
+          <i></i><i class="sa"></i><i></i><i></i><i class="sa"></i><i></i>
+          <i class="sa"></i><i></i><i class="sa"></i><i></i><i></i><i></i>
+        </div>
+        <div class="mini-cap">one sequence's logical pages 0–3 → wherever free HBM was</div>
+      </div>
+    </div>
+    <div class="prob">
+      <span class="tag">broken · phase</span>
+      <h3>Prefill and decode are different workloads</h3>
+      <p>Prefill processes the whole prompt: T queries against T keys — GEMM-shaped,
+         tensor-core territory. Decode processes one new token: a single query row against
+         the entire cache — GEMV-shaped, pure bandwidth. No one kernel shape is optimal
+         for both.</p>
+      <div class="minibox">
+        <div class="mini-shapes">
+          <div class="sq">T×T</div>
+          <div class="sl">1×N</div>
+        </div>
+        <div class="mini-cap">prefill's score tile vs decode's score row</div>
+      </div>
+    </div>
+    <div class="prob">
+      <span class="tag">broken · schedule</span>
+      <h3>Batched decode</h3>
+      <p>A serving step runs dozens of sequences in one forward pass — each at its own
+         position, each with its own context length, all sharing one launch. Kernels must
+         consume per-sequence metadata instead of batch-uniform shapes.</p>
+      <div class="minibox">
+        <div class="mini-text">1 step = 32 seqs · lens 64 … 2048 · 1 launch</div>
+      </div>
+    </div>
+  </div>
+</div></section>
+
+<!-- ============ 2. RAGGED ============ -->
+<section id="ragged"><div class="wrap reveal">
+  <div class="kicker">Section 2 · Interactive</div>
+  <h2><span class="n">02</span>Ragged tensors: the rectangle tax, made visible</h2>
+  <p class="lead">Padding is easiest to see in one picture. Pick a batch, then flip between the
+     layout a dense kernel wants and the one FlashInfer consumes. One array —
+     <code>indptr</code> — replaces the whole mask: <code>indptr[i]</code> says where sequence i
+     starts, and the kernel reads <code>kv[indptr[i] : indptr[i+1]]</code>. Nothing else exists.</p>
+
+  <div class="panel">
+    <div class="presets" id="rgBatch">
+      <button class="preset" data-b="uniform" type="button">near-uniform lengths</button>
+      <button class="preset on" data-b="mixed" type="button">mixed lengths</button>
+      <button class="preset" data-b="tail" type="button">long-tail lengths</button>
+    </div>
+    <div class="presets" id="rgMode" style="margin-top:10px">
+      <button class="preset on" data-m="pad" type="button">padded · what SDPA needs</button>
+      <button class="preset" data-m="rag" type="button">ragged · what FlashInfer eats</button>
+    </div>
+
+    <div class="rg-rows" id="rgRows"></div>
+
+    <div class="rg-flatwrap">
+      <div class="rg-flatlab" id="rgFlatLab"></div>
+      <div class="rg-flat" id="rgFlat"></div>
+      <div class="iprow" id="rgIp"></div>
+    </div>
+
+    <div class="chips" id="rgStats" style="margin-top:18px"></div>
+    <div class="verdict v2" id="rgVerdict"></div>
+  </div>
+
+  <p class="note">The same trick pays twice: no ghost memory <b>and</b> no mask tensor. The kernel's
+     thread count is derived from the indptr array, so every scheduled token is a real token —
+     at batch assembly time, not inside the kernel. Decode batches are the extreme case:
+     every query row is exactly one token, so qo_indptr is just [0, 1, …, B].</p>
+</div></section>
+
+<!-- ============ 3. PAGED ============ -->
+<section id="paged"><div class="wrap reveal">
+  <div class="kicker">Section 3 · Interactive</div>
+  <h2><span class="n">03</span>The paged KV cache: contiguous is a fiction</h2>
+  <p class="lead">Logically, each request's cache is one contiguous tensor. Physically, PagedAttention
+     keeps it in small pages wherever free HBM was, and a <b>page table</b> —
+     <code>kv_indices</code> — maps logical block i to a physical page. The kernel gathers pages
+     through that table; the block manager allocates in O(1); waste is bounded by one partial
+     page per request. Step a batch through decode and watch the pages scatter.</p>
+
+  <div class="panel">
+    <div class="pmwrap">
+      <div>
+        <div class="pmlab">HBM · 64 pages × 4 tokens (toy size; real systems: 16)</div>
+        <div class="pmem" id="pgMem"></div>
+        <div class="pglegend" id="pgLegend"></div>
+        <div class="pgstats" id="pgStats"></div>
+      </div>
+      <div>
+        <div class="pmlab">page tables · one row per live request</div>
+        <div id="pgTables"></div>
+        <div class="mctl" style="margin-top:6px">
+          <button class="btn primary" id="pgStep" type="button">▶ decode step</button>
+          <button class="btn" id="pgNew" type="button">+ request</button>
+          <button class="btn" id="pgFin" type="button">✕ finish oldest</button>
+          <button class="btn" id="pgReset" type="button">↺ reset</button>
+        </div>
+        <div class="mread" id="pgRead">Press <b>decode step</b> — each step appends one token to every
+           live request. Watch what happens when a request crosses a page boundary.</div>
+      </div>
+    </div>
+  </div>
+
+  <p class="note">Compare with the alternative: reserving <code>[B, max_len]</code> contiguous cache
+     per sequence up front. That reserves B · max_len · 2 bytes × layers × KV heads <b>before the
+     first token arrives</b> — so the batch size and context length are capped by a worst case that
+     mostly never happens. Pages turn that into on-demand allocation with ≤ 1 page of slack per
+     request and zero external fragmentation — freed pages are instantly reusable, no compaction.</p>
+</div></section>
+
+<!-- ============ 4. PHASES ============ -->
+<section id="phases"><div class="wrap reveal">
+  <div class="kicker">Section 4 · Interactive</div>
+  <h2><span class="n">04</span>Prefill is a GEMM. Decode is a GEMV.</h2>
+  <p class="lead">Same operator, opposite physics. Prefill's arithmetic intensity grows with prompt
+     length until tensor cores saturate. Decode streams the entire cache to produce a single token
+     and never leaves the memory wall: with GQA 32/8 its intensity is <b>4 FLOPs/byte at every
+     context length</b> (each K/V byte feeds 4 query heads — 1.0 without GQA). That split is why
+     FlashInfer ships two wrappers, not one.</p>
+
+  <div class="panel">
+    <div class="presets" id="phMode">
+      <button class="preset" data-m="pre" type="button">prefill · GEMM-like</button>
+      <button class="preset on" data-m="dec" type="button">decode · GEMV-like</button>
+    </div>
+    <div class="ctl" style="max-width:420px">
+      <label>context length N <span class="val" id="phSlVal">32,768 tok</span></label>
+      <input type="range" id="phSlide" min="0" max="6" value="5">
+    </div>
+
+    <div class="shapes">
+      <div class="pdiag" id="pdPre">
+        <h3>prefill <span>· T query rows at once</span></h3>
+        <div class="blkrow">
+          <div class="blk q" style="width:70px;height:46px">Q<span class="dim">T×128</span></div>
+          <div class="blk kv" style="width:44px;height:46px">K<span class="dim">T×128</span></div>
+          <div class="blk kv" style="width:44px;height:46px">V<span class="dim">T×128</span></div>
+          <div class="blk s" style="width:118px;height:118px">S<span class="dim">T×T · never<br>leaves SRAM</span></div>
+          <div class="blk o" style="width:70px;height:46px">O<span class="dim">T×128</span></div>
+        </div>
+        <div class="bcap">Every product is a big matmul — <b>tensor cores engaged</b>,
+             intensity grows with T. FlashAttention tiling keeps S on chip.</div>
+      </div>
+      <div class="pdiag" id="pdDec">
+        <h3>decode <span>· 1 query row per sequence (×B)</span></h3>
+        <div class="blkrow">
+          <div class="blk q" style="width:70px;height:10px">Q<span class="dim">1×128</span></div>
+          <div class="blk kv" style="width:26px;height:118px">K<span class="dim">N×128</span></div>
+          <div class="blk kv" style="width:26px;height:118px">V<span class="dim">N×128</span></div>
+          <div class="blk s" style="width:118px;height:14px">S<span class="dim">1×N</span></div>
+          <div class="blk o" style="width:70px;height:10px">O<span class="dim">1×128</span></div>
+        </div>
+        <div class="bcap">One Q row <b>streams the entire cache</b> — bandwidth-bound
+             at any length. Split-KV spreads the stream across SMs (FlashDecoding).</div>
+      </div>
+    </div>
+
+    <div class="chips" id="phStats" style="margin-top:20px"></div>
+
+    <div class="gauge">
+      <div class="gt-label">Arithmetic intensity (FLOPs per byte of HBM traffic), log scale — the two phases live at opposite ends</div>
+      <div class="gtrack">
+        <div class="gridge" style="left:61.8%"><span>bf16 ridge · 295</span></div>
+        <div class="gridge" style="left:69.3%"><span style="transform:translateX(0);left:8px">fp8 · 591</span></div>
+        <div class="gmark dec" id="gDec" style="left:15%"></div>
+        <div class="glab" id="gDecLab" style="left:15%">decode · 4</div>
+        <div class="gmark pre" id="gPre" style="left:80.4%"></div>
+        <div class="glab" id="gPreLab" style="left:80.4%">prefill · 1638</div>
+      </div>
+      <div class="gscale"><span>1</span><span>10</span><span>100</span><span>1K</span><span>10K FLOPs/byte</span></div>
+    </div>
+
+    <div class="verdict v3" id="phVerdict"></div>
+  </div>
+
+  <p class="note">Model: GQA 32 query / 8 KV heads, head_dim 128, fp16, fused (Q, K, V in · O out ·
+     S never in HBM). Prefill AI ≈ 0.8 · T. Decode per layer: K/V bytes = 8 · N · d · 2 · 2 B;
+     FLOPs = 32 · 4 · N · d — a fixed ~75× bandwidth excess. This is also why batching is nearly
+     free in decode (see batching-effects): more sequences reuse the same memory system, until
+     bandwidth saturates.</p>
+</div></section>
+
+<!-- ============ 5. BENCH ============ -->
+<section id="bench"><div class="wrap reveal">
+  <div class="kicker">Section 5 · Measured</div>
+  <h2><span class="n">05</span>Batch decode: the gap opens with the batch</h2>
+  <p class="lead">Same hardware, same model shape — H100, seq_len 2048, GQA 32 query / 8 KV heads.
+     At B = 1 the implementations tie: both stream one cache. As the batch grows, SDPA pays for
+     padding and dense layouts while FlashInfer's cost tracks only the real KV bytes.
+     Bars to scale, latency in ms.</p>
+
+  <div class="panel">
+    <div class="bench">
+      <div>
+        <div class="bhead"><b>B = 1</b><span class="sub2">one sequence</span><span class="spd tie">1.0× · tie</span></div>
+        <div class="brow"><span class="bl">SDPA</span><div class="bar dim"><i style="width:4.9%"></i></div><span class="bval">0.02</span></div>
+        <div class="brow"><span class="bl">FlashInfer</span><div class="bar good"><i style="width:4.9%"></i></div><span class="bval">0.02</span></div>
+      </div>
+      <div>
+        <div class="bhead"><b>B = 8</b><span class="sub2">8 sequences · 1 forward pass</span><span class="spd">3.7×</span></div>
+        <div class="brow"><span class="bl">SDPA</span><div class="bar dim"><i style="width:26.8%"></i></div><span class="bval">0.11</span></div>
+        <div class="brow"><span class="bl">FlashInfer</span><div class="bar good"><i style="width:7.3%"></i></div><span class="bval">0.03</span></div>
+      </div>
+      <div>
+        <div class="bhead"><b>B = 32</b><span class="sub2">32 sequences · 1 forward pass</span><span class="spd">4.1×</span></div>
+        <div class="brow"><span class="bl">SDPA</span><div class="bar dim"><i style="width:100%"></i></div><span class="bval">0.41</span></div>
+        <div class="brow"><span class="bl">FlashInfer</span><div class="bar good"><i style="width:24.4%"></i></div><span class="bval">0.10</span></div>
+      </div>
+    </div>
+
+    <div class="chips" style="margin-top:20px">
+      <div class="chip c1"><b>5×</b><span>FlashInfer time B32 vs B1 — for 32× the work</span></div>
+      <div class="chip c3"><b>20.5×</b><span>SDPA time B32 vs B1 — padding scales the batch</span></div>
+      <div class="chip c2"><b>0.31 ms</b><span>the B = 32 gap, per layer per step</span></div>
+    </div>
+
+    <div class="verdict v1">Both kernels are memory-bound; the difference is <b>which bytes they're
+       allowed to skip</b>. SDPA materializes a padded, dense batch — ghost tokens cost real
+       bandwidth. FlashInfer walks the indptr and the page table, so its time tracks
+       Σ(context lengths), not B · max_len.</div>
+  </div>
+
+  <p class="note">Table from the chapter: batch decode on H100, seq_len = 2048, GQA 32/8 heads.
+     Ratios computed from the rounded table values (the text quotes 4.2× on unrounded data).</p>
+</div></section>
+
+<!-- ============ 6. INTEGRATION ============ -->
+<section id="api"><div class="wrap reveal">
+  <div class="kicker">Section 6 · Walkthrough</div>
+  <h2><span class="n">06</span>Two wrappers, one workspace, one plan per step</h2>
+  <p class="lead">Everything above — ragged indptr, the page table, prefill vs decode — lands in a
+     small integration pattern. Walk through what happens <b>once</b> at startup and what happens
+     <b>every serving step</b>:</p>
+
+  <div class="panel">
+    <div class="iow">
+      <pre class="code"><span class="ln" data-i="0"><span class="c"># once, at engine startup</span></span>
+<span class="ln" data-i="1">workspace = torch.<span class="f">empty</span>(<span class="n">32</span> * <span class="n">1024</span> * <span class="n">1024</span>, dtype=torch.uint8, device=<span class="s">"cuda"</span>)</span>
+<span class="ln" data-i="2">prefill = flashinfer.<span class="t">BatchPrefillWithPagedKVCacheWrapper</span>(workspace)</span>
+<span class="ln" data-i="3">decode  = flashinfer.<span class="t">BatchDecodeWithPagedKVCacheWrapper</span>(workspace)</span>
+<span class="ln" data-i="4"></span>
+<span class="ln" data-i="5"><span class="c"># every engine step, for the requests in this batch</span></span>
+<span class="ln" data-i="6">decode.<span class="f">begin_forward</span>(</span>
+<span class="ln" data-i="7">    qo_indptr  = qo_indptr,   <span class="c"># ragged queries — decode: [0, 1, …, B]</span></span>
+<span class="ln" data-i="8">    kv_indptr  = kv_indptr,   <span class="c"># where each sequence's KV starts and ends</span></span>
+<span class="ln" data-i="9">    kv_indices = kv_indices,  <span class="c"># the page table from the block manager</span></span>
+<span class="ln" data-i="10">    num_qo_heads=<span class="n">32</span>, num_kv_heads=<span class="n">8</span>, head_dim=<span class="n">128</span>)</span>
+<span class="ln" data-i="11">out = decode.<span class="f">forward</span>(q, kv_data)   <span class="c"># one fused launch over scattered pages</span></span></pre>
+
+      <div>
+        <div class="ledger" id="apiLedger"></div>
+        <div class="mctl">
+          <button class="btn primary" id="apiPlay" type="button">▶ Play</button>
+          <button class="btn" id="apiStep" type="button">Step ›</button>
+          <button class="btn" id="apiReset" type="button">↺ Reset</button>
+          <span class="steplbl" id="apiStepLbl">step 0 / 5</span>
+        </div>
+        <div class="mread" id="apiRead">Press play — startup first, then one serving step.</div>
+      </div>
+    </div>
+  </div>
+
+  <p class="note">Modern FlashInfer splits the planning call into <code>wrapper.plan(...)</code> +
+     <code>wrapper.run(...)</code> — same split: CPU-side scheduling, GPU-side execution.
+     The kernels are Jinja-templated CUDA, JIT-compiled at first call for your head_dim, dtype
+     and layout. SGLang runs FlashInfer as its default attention backend; vLLM and MLC-LLM
+     integrate it as an option. FlashAttention-3 itself was co-designed with it.</p>
+</div></section>
+
+<!-- ============ 7. HABITS ============ -->
+<section id="habits"><div class="wrap reveal">
+  <div class="kicker">Section 7</div>
+  <h2><span class="n">07</span>Four habits for the serving path</h2>
+  <p class="lead">You will never write these kernels — you'll feed them, and keep them on the
+     fast path. Four habits that decide whether you actually are:</p>
+
+  <div class="strats">
+    <div class="strat">
+      <h3>Never pay for padding</h3>
+      <p>Assemble batches as ragged <code>indptr</code> arrays, not padded rectangles —
+         for queries, KV, and anything else with variable length. The mask approach spends
+         real bandwidth on ghost tokens; indptr spends one integer per sequence.</p>
+      <div class="mini"><span class="m bad">pad to max · mask</span><span class="arr">→</span><span class="m hi">indptr · 0 ghost cells</span></div>
+    </div>
+    <div class="strat">
+      <h3>Page the cache, preallocate nothing</h3>
+      <p>A contiguous <code>[B, max_len]</code> cache reserves B·max_len·2 bytes × layers × KV
+         heads before the first token arrives — that cap, not the kernel, limits your batch.
+         Pages allocate on demand in O(1) and waste at most one partial page per request.</p>
+      <div class="mini"><span class="m bad">[B × max_len] reserved</span><span class="arr">→</span><span class="m hi">pages on demand · ≤1 page slack</span></div>
+    </div>
+    <div class="strat">
+      <h3>Plan once per step, reuse across layers</h3>
+      <p><code>qo_indptr</code>, <code>kv_indptr</code> and <code>kv_indices</code> are identical
+         for every layer. Call <code>begin_forward</code> once per engine step and share the plan
+         across the whole model — planning per layer burns CPU inside the loop you're trying to
+         keep GPU-busy.</p>
+      <div class="mini"><span class="m">1 plan</span><span class="arr">→</span><span class="m hi">all L layers</span></div>
+    </div>
+    <div class="strat">
+      <h3>Pick the kernel for the phase</h3>
+      <p>Prefill is a tensor-core GEMM; decode is a bandwidth problem — so batch aggressively
+         (same memory system, more users) and let split-KV schedules spread long caches across
+         SMs. Then keep the habit from the FlashAttention chapter: bench achieved GB/s, not FLOPs.</p>
+      <div class="mini"><span class="m">prefill: max FLOPs</span><span class="m">decode: max B/s</span></div>
+    </div>
+  </div>
+</div></section>
+
+<!-- ============ 8. NEWS ============ -->
+<section id="news"><div class="wrap reveal">
+  <div class="kicker">Section 8 · Fresh from upstream · checked 2026-10-17</div>
+  <h2><span class="n">08</span>What's new: Hopper → Blackwell → Rubin</h2>
+  <p class="lead">The integration pattern above is now the stable part. What moves is everything
+     around it: every release lands the newest NVIDIA silicon and the newest model architectures
+     as kernels. The last month shipped three:</p>
+
+  <div class="news">
+    <div class="nrow">
+      <span class="nv">v0.7.2</span><span class="nd">Oct 15, 2026</span>
+      <ul>
+        <li><b>Rubin (SM107) support</b> — MoE experts and DeepSeek-V4 sparse MLA run on Rubin via the
+            cuDNN "Frost" CuTe DSL backend (BF16, MXFP8, NVFP4).</li>
+        <li><b>DeepSeek-V4 NVFP4 sparse-MLA decode</b> on B200/B300 through the new
+            <code>backend="cake"</code>; prefill paths for RTX PRO 6000 / RTX 5090.</li>
+        <li><b>Fused-epilogue GEMMs</b> — FP8/NVFP4 linear + SwiGLU, and QKV + QK-norm + RoPE,
+            fused into single kernels (<code>prims_ts</code>).</li>
+        <li><b>Speculative decoding</b> — multi-token verify rows auto-route to cuDNN on B200/B300.</li>
+      </ul>
+    </div>
+    <div class="nrow">
+      <span class="nv">v0.7.1</span><span class="nd">Oct 9, 2026</span>
+      <ul>
+        <li><b>Quantized expert-parallel MoE</b> — NVFP4/MXFP8 on Rubin SM107; SM12x W4A16 reported
+            1.36× faster than Marlin on DGX Spark.</li>
+        <li><b>Kimi K3 fused speculative verification</b> — +1.8–3.3% vLLM throughput on 8×B300;
+            cuDNN linear-attention prefill for KDA / Gated DeltaNet on Blackwell.</li>
+        <li><b>DeepSeek-V4.1 dual-cache sparse MLA</b>; compact 528-byte KV rows for GLM NoPE
+            checkpoints (~19.5% smaller).</li>
+        <li><b>plan()/run() formalized</b> — the CPU/GPU split from section 06, with backend reuse
+            across calls.</li>
+      </ul>
+    </div>
+    <div class="nrow">
+      <span class="nv">v0.7.0</span><span class="nd">Sep 22, 2026</span>
+      <ul>
+        <li><b>Unified MoELayer API + MegaMoE</b> — fused expert-parallel MoE kernels get the
+            "one library" treatment attention got in 2024.</li>
+        <li><b>Autotuner v2</b> — tunes the way you serve, with persistent caching across runs.</li>
+        <li><b>Experimental-API policy</b> — a published stability contract for everything else.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="verdict v1">Read together, the releases confirm the bet this page opened with: the
+     <b>ragged / paged / plan-run contract is stable while everything around it churns</b> — new
+     silicon (Hopper → Blackwell → Rubin), new architectures (DeepSeek sparse MLA, Kimi KDA/Mamba2,
+     sparse MoE), new formats (FP8 → MXFP8 → NVFP4). "Inference-specific kernels" now means far
+     more than attention — but qo_indptr, kv_indices and a workspace are still the whole interface.</div>
+
+  <p class="note">Sources: <a href="https://github.com/flashinfer-ai/flashinfer/releases">GitHub releases</a> ·
+     <a href="https://flashinfer.ai/">flashinfer.ai blog</a> (v0.7 announcement, MegaMoE and Autotuner v2
+     posts, Sep 22 2026). After upgrading, run <code>flashinfer download-kernels</code> — the JIT story
+     from section 06 now ships as prebuilt cubin wheels with a warm JIT cache.</p>
+</div></section>
+
+<footer><div class="wrap">
+  <div class="formula">ragged batches · paged KV · prefill GEMMs · decode GEMVs —
+    <b>one kernel library for every shape serving produces</b></div>
+  <div class="fin">FlashInfer · part of the physics-llm-inference series · prev: flash attention</div>
+</div></footer>
+
+<script>
+(function(){
+  "use strict";
+  var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  function el(tag, cls, txt){
+    var e = document.createElement(tag);
+    if(cls) e.className = cls;
+    if(txt !== undefined) e.textContent = txt;
+    return e;
+  }
+  function fmt(n){
+    return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  }
+
+  /* ---------- reveal on scroll ---------- */
+  var io = new IntersectionObserver(function(es){
+    es.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add("in"); io.unobserve(e.target);} });
+  },{threshold:.12});
+  document.querySelectorAll(".reveal").forEach(function(x){ io.observe(x); });
+
+  /* shared sequence palette: index 0..4 → class suffix */
+  var SC = ["a","b","c","d","e"];
+
+  /* ================= 2. ragged ================= */
+  var RG = {
+    uniform: [480, 512, 496, 528],
+    mixed:   [128, 512, 64, 896],
+    tail:    [32, 2048, 96, 512]
+  };
+  var rgBatch = "mixed", rgMode = "pad";
+  var rgRows = document.getElementById("rgRows"), rgFlat = document.getElementById("rgFlat"),
+      rgFlatLab = document.getElementById("rgFlatLab"), rgIp = document.getElementById("rgIp"),
+      rgStats = document.getElementById("rgStats"), rgVerdict = document.getElementById("rgVerdict");
+
+  function renderRg(){
+    var lens = RG[rgBatch];
+    var maxL = Math.max.apply(null, lens);
+    var real = lens.reduce(function(a,b){ return a+b; }, 0);
+    var pad  = lens.length * maxL;
+    var waste = pad - real;
+
+    rgRows.textContent = "";
+    lens.forEach(function(L, i){
+      var row = el("div","rg-row");
+      var lab = el("span","rg-lab", "req " + i + " · " + L);
+      var trk = el("div","rg-track");
+      var fill = el("i","rg-fill s" + SC[i]);
+      fill.style.width = (L/maxL*100) + "%";
+      trk.appendChild(fill);
+      if(rgMode === "pad"){
+        var ghost = el("u","rg-pad");
+        ghost.style.width = ((maxL-L)/maxL*100) + "%";
+        trk.appendChild(ghost);
+      }
+      row.appendChild(lab); row.appendChild(trk);
+      rgRows.appendChild(row);
+    });
+
+    rgFlat.textContent = "";
+    lens.forEach(function(L, i){
+      var seg = el("i","s" + SC[i]);
+      seg.style.width = (L/real*100) + "%";
+      rgFlat.appendChild(seg);
+    });
+
+    var ip = [0], acc = 0;
+    lens.forEach(function(L){ acc += L; ip.push(acc); });
+
+    if(rgMode === "pad"){
+      rgFlatLab.textContent = "one flat buffer per layer is impossible here — rows must align, so every row becomes " + maxL + " slots:";
+      rgIp.innerHTML = "attention mask = <b>" + fmt(waste) + "</b> hidden cells · the kernel walks all " + fmt(pad) + " slots, then throws the ghosts away";
+    } else {
+      rgFlatLab.textContent = "the ragged layout: all four requests packed into one flat buffer, " + fmt(real) + " tokens, no gaps:";
+      rgIp.textContent = "";
+      rgIp.appendChild(document.createTextNode("indptr = [ "));
+      ip.forEach(function(v,i){
+        var s = el("span","seg");
+        var b = el("b",null,String(v));
+        s.appendChild(b);
+        if(i < ip.length-1) s.style.borderBottom = "2px solid rgba(88,166,255,.55)";
+        rgIp.appendChild(s);
+        if(i < ip.length-1) rgIp.appendChild(document.createTextNode(" "));
+      });
+      rgIp.appendChild(document.createTextNode(" ]  →  seq i lives at kv[ indptr[i] : indptr[i+1] ]"));
+    }
+
+    rgStats.textContent = "";
+    [["real tokens", fmt(real)],
+     ["longest request", fmt(maxL)],
+     rgMode === "pad" ? ["padded slots", fmt(pad) + " (+" + Math.round(waste/real*100) + "%)"]
+                      : ["padding cells", "0"],
+     rgMode === "pad" ? ["mask tensor", "B × max_len"] : ["mask tensor", "none — indptr only"]
+    ].forEach(function(s,i){
+      var chip = el("div","chip c" + ((i%3)+1));
+      chip.appendChild(el("b",null,s[0]));
+      chip.appendChild(el("span",null,s[1]));
+      rgStats.appendChild(chip);
+    });
+
+    var w = Math.round(waste/pad*100);
+    var v;
+    if(rgBatch === "uniform"){
+      v = rgMode === "pad"
+        ? ["v2","Only " + w + "% waste — lengths are near-uniform, so padding is cheap. This training-shaped rectangle is exactly what SDPA was designed for; ragged gains are marginal here."]
+        : ["v1","Same batch, zero waste — but there was only " + w + "% to reclaim. Ragged layout pays off when lengths diverge, not when they match."];
+    } else if(rgBatch === "mixed"){
+      v = rgMode === "pad"
+        ? ["v3", fmt(real) + " real tokens padded into " + fmt(pad) + " slots — " + w + "% of the batch is allocated, streamed, and multiplied before the mask discards it."]
+        : ["v1","Same " + fmt(real) + " tokens, zero padding, zero mask. Five integers of indptr replace a B × max_len mask — and the kernel never schedules a ghost."];
+    } else {
+      v = rgMode === "pad"
+        ? ["v3","A long-tail batch: " + w + "% waste. The worst case for dense attention — and the common case in production, where one long conversation shares a GPU with short ones."]
+        : ["v1","The 2048-token request no longer drags three short ones along with it. Every thread the kernel launches maps to a real token."];
+    }
+    rgVerdict.className = "verdict " + v[0];
+    rgVerdict.textContent = v[1];
+
+    document.querySelectorAll("#rgBatch .preset").forEach(function(b){
+      b.classList.toggle("on", b.dataset.b === rgBatch);
+    });
+    document.querySelectorAll("#rgMode .preset").forEach(function(b){
+      b.classList.toggle("on", b.dataset.m === rgMode);
+    });
+  }
+  document.querySelectorAll("#rgBatch .preset").forEach(function(b){
+    b.addEventListener("click", function(){ rgBatch = b.dataset.b; renderRg(); });
+  });
+  document.querySelectorAll("#rgMode .preset").forEach(function(b){
+    b.addEventListener("click", function(){ rgMode = b.dataset.m; renderRg(); });
+  });
+  renderRg();
+
+  /* ================= 3. paged ================= */
+  var PTOK = 4, NPAGES = 64;
+  var phys = new Array(NPAGES).fill(null);   // {s: seqIdx, li: logicalIdx, just: bool}
+  var seqs = [];                             // {s, len, pages:[physIdx]}
+  var born = 0;                              // total requests ever created
+  var pgMem = document.getElementById("pgMem"), pgLegend = document.getElementById("pgLegend"),
+      pgStats = document.getElementById("pgStats"), pgTables = document.getElementById("pgTables"),
+      pgRead = document.getElementById("pgRead"),
+      pgStepBtn = document.getElementById("pgStep"), pgNewBtn = document.getElementById("pgNew"),
+      pgFinBtn = document.getElementById("pgFin"), pgResetBtn = document.getElementById("pgReset");
+
+  (function(){
+    for(var i=0;i<NPAGES;i++) pgMem.appendChild(el("div","pcell"));
+    var names = ["A","B","C","D","E"];
+    names.forEach(function(n,i){
+      var c = el("span","lchip");
+      var d = el("i","s" + SC[i]); c.appendChild(d);
+      c.appendChild(document.createTextNode("req " + n));
+      pgLegend.appendChild(c);
+    });
+    var f = el("span","lchip");
+    var fi = el("i","free"); f.appendChild(fi);
+    f.appendChild(document.createTextNode("free"));
+    pgLegend.appendChild(f);
+  })();
+
+  function allocPage(s, li){
+    var freeIds = [];
+    for(var i=0;i<NPAGES;i++) if(!phys[i]) freeIds.push(i);
+    if(!freeIds.length) return -1;
+    var id = freeIds[Math.floor(Math.random()*freeIds.length)];
+    phys[id] = {s:s, li:li};
+    return id;
+  }
+
+  function addRequest(tokens, silent){
+    if(seqs.length >= 5 || born >= 5) return null;
+    var s = born++;
+    var pages = [], need = Math.ceil(tokens/PTOK);
+    for(var k=0;k<need;k++){
+      var id = allocPage(s, k);
+      if(id < 0) return null;
+      pages.push(id);
+    }
+    seqs.push({s:s, len:tokens, pages:pages});
+    return pages;
+  }
+
+  function resetPg(){
+    for(var i=0;i<NPAGES;i++) phys[i] = null;
+    seqs = []; born = 0;
+    addRequest(5); addRequest(9); addRequest(3);
+    pgRead.innerHTML = "Press <b>decode step</b> — each step appends one token to every live request. " +
+      "Watch what happens when a request crosses a page boundary.";
+    renderPg();
+  }
+
+  function renderPg(){
+    var cells = pgMem.children;
+    for(var i=0;i<NPAGES;i++){
+      var c = cells[i], p = phys[i];
+      c.className = "pcell" + (p ? " s" + SC[p.s] : "") + (p && p.just ? " just" : "");
+      c.title = p ? ("page " + i + " · req " + String.fromCharCode(65+p.s) + " · logical " + p.li)
+                  : ("page " + i + " · free");
+    }
+    var used = 0, real = 0;
+    seqs.forEach(function(q){ used += q.pages.length; real += q.len; });
+
+    pgTables.textContent = "";
+    seqs.forEach(function(q){
+      var name = String.fromCharCode(65 + q.s);
+      var row = el("div","prow");
+      row.appendChild(el("span","pdot s" + SC[q.s]));
+      row.appendChild(el("span","pname", name));
+      row.appendChild(el("span","plen", q.len + " tok · " + q.pages.length + " page" + (q.pages.length>1?"s":"")));
+      row.appendChild(el("span","pkv", "kv_indices = [" + q.pages.join(", ") + "]"));
+      pgTables.appendChild(row);
+      var map = el("div","pmap");
+      q.pages.forEach(function(pid, li){
+        map.appendChild(el("span",null, "L" + li + " → "));
+        var last = map.lastChild;
+        var b = el("b",null,String(pid));
+        last.appendChild(b);
+        last.title = "logical page " + li + " lives in physical page " + pid;
+      });
+      pgTables.appendChild(map);
+    });
+    if(!seqs.length) pgTables.appendChild(el("div","pmlab","no live requests — finish/reset to continue"));
+
+    pgStats.textContent = "";
+    var cap = used*PTOK, waste = cap - real;
+    [["pages in use", used + " / " + NPAGES],
+     ["cache tokens", fmt(real) + " real · " + fmt(cap) + " slots"],
+     ["waste", waste + " tok (≤ " + PTOK + " / request)"],
+     ["external frag.", "0 — freed pages reused as-is"]
+    ].forEach(function(s,i){
+      var chip = el("div","chip c" + ((i%3)+1));
+      chip.appendChild(el("b",null,s[0]));
+      chip.appendChild(el("span",null,s[1]));
+      pgStats.appendChild(chip);
+    });
+
+    pgStepBtn.disabled = seqs.length === 0;
+    pgNewBtn.disabled  = seqs.length >= 5 || born >= 5;
+    pgFinBtn.disabled  = seqs.length === 0;
+  }
+
+  pgStepBtn.addEventListener("click", function(){
+    var crossed = [];
+    seqs.forEach(function(q){
+      q.len++;
+      if((q.len - 1) % PTOK === 0){
+        var id = allocPage(q.s, q.pages.length);
+        if(id >= 0){
+          q.pages.push(id);
+          crossed.push({name:String.fromCharCode(65+q.s), id:id, li:q.pages.length-1});
+        }
+      }
+    });
+    for(var i=0;i<NPAGES;i++){ if(phys[i]) phys[i].just = false; }
+    if(crossed.length){
+      var parts = crossed.map(function(c){ return "req " + c.name + " → new page at physical " + c.id + " (logical " + c.li + ")"; });
+      pgRead.innerHTML = "<b>Page boundary.</b> " + parts.join(" · ") +
+        ". The block manager popped whatever was free — not necessarily adjacent to anything. " +
+        "The kernel only finds it through kv_indices; contiguity was never required.";
+      crossed.forEach(function(c){ phys[c.id].just = true; });
+    } else {
+      pgRead.innerHTML = "<b>Decode step: +1 token to each of " + seqs.length +
+        " requests, no page crossed.</b> Steady state — the existing pages absorb the tokens until one of them fills (every " +
+        PTOK + " steps per request). This is the entire cost of a decode attention step: gather pages, stream K/V, online softmax.";
+    }
+    renderPg();
+  });
+
+  pgNewBtn.addEventListener("click", function(){
+    var pages = addRequest(5);
+    if(pages){
+      pgRead.innerHTML = "<b>Request " + String.fromCharCode(65 + (born-1)) +
+        " arrives with a 5-token prompt → " + pages.length + " pages, at physical [" + pages.join(", ") +
+        "].</b> Wherever free slots were. Prefill runs over the ragged batch; its KV lands in these pages for every future decode step.";
+    }
+    renderPg();
+  });
+
+  pgFinBtn.addEventListener("click", function(){
+    if(!seqs.length) return;
+    var gone = seqs.shift();
+    var freed = gone.pages.length;
+    gone.pages.forEach(function(id){ phys[id] = null; });
+    pgRead.innerHTML = "<b>Request " + String.fromCharCode(65 + gone.s) + " finished — " + freed +
+      " pages return to the free list instantly.</b> They'll be reused by whatever arrives next, in place: " +
+      "no compaction, no defragmentation, no copy. This is the payoff versus reserving [B × max_len] up front.";
+    renderPg();
+  });
+
+  pgResetBtn.addEventListener("click", resetPg);
+  resetPg();
+
+  /* ================= 4. phases ================= */
+  var PRE_T = [256, 512, 1024, 2048, 4096, 8192];
+  var DEC_N = [1024, 2048, 4096, 8192, 16384, 32768, 65536];
+  var PH_QH = 32, PH_KVH = 8, PH_D = 128;
+  var PEAK = 989e12, BW = 3.35e12;
+  var phMode = "dec", phIdx = 5;
+  var phSlide = document.getElementById("phSlide"), phSlVal = document.getElementById("phSlVal"),
+      pdPre = document.getElementById("pdPre"), pdDec = document.getElementById("pdDec"),
+      phStats = document.getElementById("phStats"), phVerdict = document.getElementById("phVerdict"),
+      gPre = document.getElementById("gPre"), gPreLab = document.getElementById("gPreLab");
+
+  function gaugePos(ai){ return Math.max(2, Math.min(97, Math.log10(Math.max(ai,1.0001))/4*100)); }
+
+  function renderPh(){
+    var isPre = phMode === "pre";
+    var steps = isPre ? PRE_T : DEC_N;
+    phSlide.max = String(steps.length - 1);
+    phIdx = Math.min(phIdx, steps.length - 1);
+    phSlide.value = String(phIdx);
+    var T = steps[phIdx];
+
+    document.querySelectorAll("#phMode .preset").forEach(function(b){
+      b.classList.toggle("on", b.dataset.m === phMode);
+    });
+    pdPre.classList.toggle("off", !isPre);
+    pdDec.classList.toggle("off", isPre);
+    pdPre.classList.toggle("live", isPre);
+    pdDec.classList.toggle("live", !isPre);
+    phSlVal.textContent = fmt(T) + (isPre ? " tok prompt" : " tok context");
+    document.querySelector("#phSlide").previousElementSibling &&
+      (document.querySelector(".ctl label").childNodes[0].textContent = isPre ? "prompt tokens T " : "context length N ");
+
+    var chips;
+    if(isPre){
+      var flops = PH_QH * 4 * T * T * PH_D;                 // 2 matmuls × 2·T²·d × q-heads
+      var bytes = 2 * (PH_QH*2 + PH_KVH*2) * T * PH_D;      // Q,O + K,V fp16
+      var ai = 0.8 * T;
+      var tC = flops/PEAK, tM = bytes/BW;
+      var comp = tC > tM;
+      gPre.style.left = gaugePos(ai) + "%";
+      gPreLab.style.left = gaugePos(ai) + "%";
+      gPreLab.textContent = "prefill · " + Math.round(ai);
+      chips = [["attention FLOPs / layer", fmt(Math.round(flops/1e6)) + " MFLOP"],
+               ["min HBM traffic / layer", (bytes/1048576).toFixed(1) + " MB"],
+               ["arithmetic intensity", "≈ 0.8 · T = " + fmt(Math.round(ai))],
+               ["bound", comp ? ("compute — by " + (tC/tM).toFixed(1) + "×") : ("memory — by " + (tM/tC).toFixed(1) + "×")]];
+      phVerdict.className = "verdict " + (comp ? "v1" : "v3");
+      phVerdict.textContent = comp
+        ? "T = " + fmt(T) + ": attention is compute-bound by " + (tC/tM).toFixed(1) + "× — a tensor-core GEMM. " +
+          "FlashAttention tiling exists to keep it that way: scores never touch HBM, so intensity stays ≈" + Math.round(ai) +
+          " FLOPs/byte instead of collapsing to d/4 = 32 (the eager path from the last chapter)."
+        : "T = " + fmt(T) + ": still slightly memory-bound — AI ≈ " + Math.round(ai) +
+          " is below the bf16 ridge (295). Short prompts don't saturate tensor cores; prefill becomes compute-bound around T ≈ 370.";
+    } else {
+      var kvB = PH_KVH * 2 * T * PH_D * 2;                  // K+V, 8 kv-heads, fp16
+      var f = PH_QH * 4 * T * PH_D;
+      var aiD = f / kvB;                                    // = 4 with GQA 32/8
+      gPre.style.left = gaugePos(aiD) + "%";
+      gPreLab.style.left = gaugePos(aiD) + "%";
+      gPreLab.textContent = "decode · " + aiD.toFixed(0);
+      chips = [["K/V read / layer", (kvB/1048576).toFixed(1) + " MB"],
+               ["attention FLOPs / layer", fmt(Math.round(f/1e6)) + " MFLOP"],
+               ["arithmetic intensity", aiD.toFixed(0) + " · constant in N"],
+               ["bound", "memory — by " + Math.round((kvB/BW)/(f/PEAK)) + "×"]];
+      phVerdict.className = "verdict v3";
+      phVerdict.textContent = "N = " + fmt(T) + ": " + (kvB/1048576).toFixed(0) + " MB of K/V per layer to produce 128 tokens — " +
+        "the bandwidth term is ~" + Math.round((kvB/BW)/(f/PEAK)) + "× the compute term. Decode never leaves the memory wall; " +
+        "batching more sequences into the same read is the only scaling that's nearly free.";
+    }
+    phStats.textContent = "";
+    chips.forEach(function(s,i){
+      var chip = el("div","chip c" + ((i%3)+1));
+      chip.appendChild(el("b",null,s[0]));
+      chip.appendChild(el("span",null,s[1]));
+      phStats.appendChild(chip);
+    });
+  }
+  document.querySelectorAll("#phMode .preset").forEach(function(b){
+    b.addEventListener("click", function(){
+      phMode = b.dataset.m;
+      phIdx = phMode === "pre" ? 3 : 5;
+      renderPh();
+    });
+  });
+  phSlide.addEventListener("input", function(){
+    phIdx = parseInt(phSlide.value, 10);
+    renderPh();
+  });
+  renderPh();
+
+  /* ================= 6. integration walkthrough ================= */
+  var API = [
+    {ln:[1], op:"once", name:"workspace · 32 MB scratch", val:"allocated once",
+     txt:"<b>One pre-allocated buffer, shared by both wrappers.</b> It holds the plan's schedule and split-KV partial reductions while a kernel runs. Nothing is allocated in the serving loop — the engine's allocator never sees FlashInfer's scratch."},
+    {ln:[2,3], op:"once", name:"prefill + decode wrappers", val:"JIT on 1st call",
+     txt:"<b>Two wrappers, because the phases have opposite shapes</b> (section 04). First call JIT-compiles kernels for your head_dim, dtype and layout — Jinja-templated CUDA specialized at runtime, not a warehouse of prebuilt binaries."},
+    {ln:[7,8,9], op:"cpu", name:"three index arrays", val:"built per step",
+     txt:"<b>The scheduler assembles the batch:</b> qo_indptr for the queries (decode: one per sequence), kv_indptr for ragged context lengths (section 02), kv_indices — the page table from the block manager (section 03). All three are layer-independent."},
+    {ln:[6,10], op:"cpu", name:"begin_forward → plan", val:"reuse × L layers",
+     txt:"<b>CPU-side planning:</b> which kernel variant, grid dimensions, how to split long KV across SMs. Cheap — and identical for every layer, so plan once per step. (Modern FlashInfer splits this into wrapper.plan() + run().)"},
+    {ln:[11], op:"gpu", name:"forward → one launch", val:"gathers pages",
+     txt:"<b>The kernel walks kv_indices</b>, streams scattered pages, and runs the online-softmax loop from the FlashAttention chapter — now over ragged, paged, batched layouts. Output written once. This is the fused path SGLang takes by default."}
+  ];
+  var apiLedger = document.getElementById("apiLedger"),
+      apiRead = document.getElementById("apiRead"), apiStepLbl = document.getElementById("apiStepLbl"),
+      apiPlayBtn = document.getElementById("apiPlay"), apiStepBtn = document.getElementById("apiStep"),
+      apiResetBtn = document.getElementById("apiReset");
+  var apiRows = [];
+  API.forEach(function(s){
+    var row = el("div","lrow");
+    row.appendChild(el("span","lnm",s.name));
+    row.appendChild(el("span","lop " + s.op, s.op.toUpperCase()));
+    row.appendChild(el("span","lcv",s.val));
+    apiLedger.appendChild(row); apiRows.push(row);
+  });
+
+  var apiStepN = 0, apiTimer = null, apiPlaying = false;
+  function renderApi(){
+    apiRows.forEach(function(r,i){ r.classList.toggle("on", i < apiStepN); });
+    document.querySelectorAll("#api .ln").forEach(function(ln){
+      var i = parseInt(ln.dataset.i,10), on = false;
+      if(apiStepN > 0 && API[apiStepN-1].ln.indexOf(i) !== -1) on = true;
+      ln.classList.toggle("on", on);
+    });
+    apiStepLbl.textContent = "step " + apiStepN + " / " + API.length;
+    apiRead.innerHTML = apiStepN > 0 ? API[apiStepN-1].txt
+      : "Press play — startup first, then one serving step.";
+  }
+  function apiPlay(){
+    if(apiPlaying) return;
+    if(apiStepN >= API.length) apiStepN = 0;
+    apiPlaying = true; apiPlayBtn.textContent = "⏸ Pause";
+    if(reduceMotion){ apiStepN = API.length; renderApi(); apiPause(); return; }
+    apiTimer = setInterval(function(){
+      if(apiStepN < API.length){ apiStepN++; renderApi(); }
+      else apiPause();
+    }, 2400);
+  }
+  function apiPause(){
+    apiPlaying = false; apiPlayBtn.textContent = "▶ Play";
+    if(apiTimer){ clearInterval(apiTimer); apiTimer = null; }
+  }
+  apiPlayBtn.addEventListener("click", function(){ apiPlaying ? apiPause() : apiPlay(); });
+  apiStepBtn.addEventListener("click", function(){ apiPause(); if(apiStepN < API.length){ apiStepN++; renderApi(); } });
+  apiResetBtn.addEventListener("click", function(){ apiPause(); apiStepN = 0; renderApi(); });
+  renderApi();
+})();
+</script>
+</body>
+</html>

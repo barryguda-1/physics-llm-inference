@@ -1,0 +1,1261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Continuous Batching — Static Waste, the Orca Insight & Paged KV Memory</title>
+<style>
+  :root{
+    --bg:#0a0e14; --panel:#101722; --panel2:#0c1220; --border:#1e2a3c;
+    --text:#dbe4ee; --muted:#7d8ca0; --faint:#4b5a6e;
+    --oh:#ff9040; --oh-dim:rgba(255,144,64,.16);
+    --work:#3fb950; --work-dim:rgba(63,185,80,.15);
+    --accent:#58a6ff; --accent-dim:rgba(88,166,255,.14);
+    --attn:#a78bfa; --attn-dim:rgba(167,139,250,.14);
+    --kv:#f472b6; --kv-dim:rgba(244,114,182,.14);
+    --teal:#4dd0e1;
+    --mono:"Cascadia Code","JetBrains Mono",Consolas,ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:16px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+       -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 22px}
+  code,.mono{font-family:var(--mono)}
+  a{color:var(--accent)}
+
+  /* ---------- chrome ---------- */
+  nav.top{position:sticky;top:0;z-index:50;background:rgba(10,14,20,.92);
+          backdrop-filter:blur(8px);border-bottom:1px solid var(--border)}
+  nav.top .wrap{display:flex;gap:4px;overflow-x:auto;padding:10px 22px}
+  nav.top a{color:var(--muted);text-decoration:none;font-size:13px;padding:6px 12px;
+            border-radius:8px;white-space:nowrap}
+  nav.top a:hover{color:var(--text);background:var(--panel)}
+  header{padding:64px 0 40px;position:relative;overflow:hidden}
+  header::before{content:"";position:absolute;inset:0;background:
+      radial-gradient(600px 300px at 15% 0%,rgba(88,166,255,.10),transparent 60%),
+      radial-gradient(700px 340px at 85% 10%,rgba(63,185,80,.08),transparent 60%)}
+  header .wrap{position:relative}
+  .kicker{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.16em;text-transform:uppercase}
+  h1{font-size:clamp(28px,5vw,44px);line-height:1.15;margin:10px 0 12px;letter-spacing:-.01em}
+  h1 .hl{color:var(--accent)}
+  .sub{color:var(--muted);max-width:800px;font-size:17px}
+  .chips{display:flex;gap:12px;flex-wrap:wrap;margin-top:26px}
+  .chip{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:12px 18px;min-width:150px}
+  .chip b{display:block;font-family:var(--mono);font-size:22px;font-weight:600}
+  .chip span{color:var(--muted);font-size:12.5px}
+  .chip.c1 b{color:var(--oh)} .chip.c2 b{color:var(--work)} .chip.c3 b{color:var(--teal)}
+
+  section{padding:56px 0 8px}
+  h2{font-size:clamp(21px,3.4vw,28px);margin:8px 0 14px;letter-spacing:-.01em}
+  h2 .n{font-family:var(--mono);font-size:.72em;color:var(--faint);margin-right:14px;vertical-align:3px}
+  .lead{color:var(--muted);max-width:860px;font-size:15.5px}
+  .lead b{color:var(--text)} .lead code{color:var(--accent);font-size:.9em}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:14px;
+         padding:18px;margin-top:22px}
+  .note{color:var(--faint);font-size:12.5px;margin-top:12px}
+  .note b{color:var(--muted)}
+
+  /* ---------- batching sims ---------- */
+  .sim-head{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-bottom:12px}
+  .btn{background:var(--panel2);border:1px solid var(--border);color:var(--text);
+       border-radius:9px;padding:8px 16px;font:600 13.5px system-ui;cursor:pointer}
+  .btn:hover{border-color:var(--faint)}
+  .btn.primary{background:var(--accent-dim);border-color:var(--accent);color:var(--accent)}
+  .btn:disabled{opacity:.45;cursor:default}
+  .ctl-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .ctl-row label{color:var(--muted);font-size:12.5px}
+  select{background:var(--panel2);color:var(--text);border:1px solid var(--border);
+         border-radius:8px;padding:7px 10px;font:13px var(--mono)}
+  canvas.gantt{width:100%;height:560px;display:block;border-radius:10px;background:var(--panel2);
+               border:1px solid var(--border)}
+  .sim-foot{display:flex;flex-wrap:wrap;gap:14px;justify-content:space-between;align-items:flex-start;margin-top:12px}
+  .meters{display:flex;gap:10px;flex-wrap:wrap}
+  .meter{background:var(--panel2);border:1px solid var(--border);border-radius:10px;
+         padding:8px 14px;min-width:104px}
+  .meter b{display:block;font-family:var(--mono);font-size:19px;font-weight:600}
+  .meter span{color:var(--faint);font-size:11px}
+  .meter.m-eff b{color:var(--work)} .meter.m-bad b{color:var(--oh)}
+  .meter.m-blue b{color:var(--accent)}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:12px}
+  .legend i{display:inline-block;width:14px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+  .lg-gen{background:var(--work)} .lg-waste{background:repeating-linear-gradient(45deg,var(--oh),var(--oh) 3px,#a86428 3px,#a86428 6px)}
+  .lg-wait{background:#2a3547} .lg-line{background:var(--accent);height:3px;width:14px;vertical-align:2px;border-radius:2px}
+  .lg-mark{background:transparent;border-left:2px dashed var(--oh);width:0;height:12px;vertical-align:-1px;margin:0 8px 0 6px}
+  .queues{font-family:var(--mono);font-size:12.5px;color:var(--muted);margin-top:10px;
+          display:flex;gap:18px;flex-wrap:wrap}
+  .queues b{color:var(--text);font-weight:600}
+  .tagspan{display:inline-flex;gap:4px;flex-wrap:wrap}
+  .tq{background:var(--accent-dim);color:var(--accent);border-radius:5px;padding:1px 7px;font-size:11px}
+  .tq.wq{background:rgba(75,90,110,.25);color:var(--muted)}
+  .tq.dq{background:var(--work-dim);color:var(--work)}
+
+  /* ---------- scheduler ---------- */
+  .sm-wrap{display:grid;grid-template-columns:1.35fr 1fr;gap:20px;align-items:stretch}
+  svg.states{width:100%;height:auto;display:block}
+  .smstate rect{fill:var(--panel2);stroke:var(--border);stroke-width:1.5;cursor:pointer}
+  .smstate text{fill:var(--text);font:600 13.5px system-ui;pointer-events:none}
+  .smstate .sub2{fill:var(--faint);font:11px var(--mono)}
+  .smstate:hover rect{stroke:var(--accent)}
+  .smstate.sel rect{stroke:var(--accent);fill:var(--accent-dim)}
+  .smstate.sel-green rect{stroke:var(--work);fill:var(--work-dim)}
+  .smstate.sel-oh rect{stroke:var(--oh);fill:var(--oh-dim)}
+  .arrow{stroke:var(--faint);stroke-width:1.6;fill:none}
+  .arrow.dash{stroke-dasharray:5 5;stroke:var(--oh)}
+  .arrow text{fill:var(--faint);font:11px var(--mono)}
+  .sm-detail{background:var(--panel2);border:1px solid var(--border);border-radius:12px;
+             padding:16px 18px;display:flex;flex-direction:column;gap:6px}
+  .sm-detail h4{margin:0;font-size:15px;color:var(--accent)}
+  .sm-detail p{margin:0;color:var(--muted);font-size:13.5px;line-height:1.6}
+  .sm-detail .kvline{font-family:var(--mono);font-size:12px;color:var(--faint)}
+  .pol-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:20px}
+  .pol{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:14px 16px}
+  .pol h4{margin:0 0 8px;font-size:13.5px}
+  .pol h4 code{color:var(--accent);font-size:12.5px}
+  .pol p{margin:0;color:var(--muted);font-size:12.5px;line-height:1.55}
+  .stage{margin-top:20px;background:var(--panel2);border:1px solid var(--border);border-radius:12px;
+         padding:14px 18px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  .stage ol{margin:0;padding:0;list-style:none;display:flex;gap:8px;flex-wrap:wrap;flex:1}
+  .stage li{background:var(--panel);border:1px solid var(--border);border-radius:8px;color:var(--faint);
+            padding:5px 12px;font-size:12.5px;opacity:.35;transition:opacity .3s,color .3s}
+  .stage li.on{opacity:1;color:var(--text);border-color:var(--oh)}
+  .stage li.on b{color:var(--oh)}
+
+  /* ---------- radix ---------- */
+  .rad-wrap{display:grid;grid-template-columns:1.4fr 1fr;gap:20px;align-items:start}
+  .tree{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:16px;
+        min-height:280px;font-family:var(--mono);overflow-x:auto}
+  .tnode{display:inline-flex;align-items:center;gap:2px;flex-wrap:wrap;padding:4px 8px;
+         border:1px solid var(--border);border-radius:8px;background:var(--panel);
+         margin:4px 6px 4px 0;position:relative;transition:border-color .3s}
+  .tnode .tk{font-size:11px;color:var(--muted);padding:1px 4px;border-radius:4px}
+  .tnode.root{border-color:var(--faint)}
+  .tnode.root .tk{color:var(--faint)}
+  .tnode.hit{border-color:var(--work);background:var(--work-dim)}
+  .tnode.hit .tk{color:var(--work)}
+  .tnode.new{border-color:var(--oh);background:var(--oh-dim);animation:popin .35s ease-out}
+  .tnode.new .tk{color:var(--oh)}
+  .tnode .ref{font-size:10px;background:var(--accent-dim);color:var(--accent);border-radius:4px;
+              padding:0 5px;margin-left:4px}
+  .tnode .evicted{position:absolute;inset:0;border-radius:8px;background:rgba(10,14,20,.7);
+              color:var(--faint);font-size:10px;display:flex;align-items:center;justify-content:center}
+  .tkids{border-left:1px solid var(--border);margin-left:10px;padding-left:14px}
+  .rad-side{display:flex;flex-direction:column;gap:12px}
+  .rad-reqs{display:flex;flex-direction:column;gap:8px}
+  .rad-reqs .btn{text-align:left;font-family:var(--mono);font-size:12px;line-height:1.5;white-space:normal}
+  .rad-reqs .btn small{display:block;color:var(--faint);font-size:10.5px}
+  .rad-reqs .btn:disabled small{color:var(--faint)}
+  .rad-log{font-family:var(--mono);font-size:12px;color:var(--muted);min-height:40px;
+           background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:10px 14px}
+  .rad-log b{color:var(--work)} .rad-log .miss{color:var(--oh)}
+  @keyframes popin{from{transform:scale(.85);opacity:0}to{transform:scale(1);opacity:1}}
+
+  /* ---------- paged ---------- */
+  .pg-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  .pg{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:16px}
+  .pg h4{margin:0 0 4px;font-size:14px}
+  .pg h4 .tag{font-size:10px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;
+              border-radius:4px;padding:2px 7px;margin-left:8px;vertical-align:1px}
+  .tag.t-bad{background:var(--oh-dim);color:var(--oh)}
+  .tag.t-good{background:var(--work-dim);color:var(--work)}
+  .pg .desc{color:var(--muted);font-size:12.5px;margin:2px 0 14px;line-height:1.55}
+  .pool{display:grid;grid-template-columns:repeat(16,1fr);gap:4px}
+  .cell{aspect-ratio:1;border-radius:5px;background:var(--panel);border:1px solid var(--border);
+        position:relative;overflow:hidden;transition:background .3s,border-color .3s;display:flex;
+        align-items:center;justify-content:center;font:700 10px var(--mono);color:var(--bg)}
+  .cell .fill{position:absolute;left:0;right:0;bottom:0;background:rgba(255,255,255,.22)}
+  .cell.cA{background:var(--accent);border-color:var(--accent)}
+  .cell.cB{background:var(--attn);border-color:var(--attn)}
+  .cell.cC{background:var(--teal);border-color:var(--teal)}
+  .cell.cD{background:var(--kv);border-color:var(--kv)}
+  .cell.cAp{background:var(--kv);border-color:var(--kv)}
+  .cell.shared{outline:2px solid var(--oh);outline-offset:-2px}
+  .cell.hole{background:repeating-linear-gradient(45deg,transparent,transparent 4px,rgba(255,144,64,.25) 4px,rgba(255,144,64,.25) 8px),var(--panel)}
+  .cell.fail{animation:failflash .5s ease-out 2}
+  @keyframes failflash{0%,100%{box-shadow:none}50%{box-shadow:0 0 0 3px rgba(248,81,73,.55)}}
+  .cell.fresh{animation:popin .35s ease-out}
+  .pg .cap{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:12px;min-height:20px}
+  .pg .cap b{color:var(--text)} .pg .cap .bad{color:var(--oh)} .pg .cap .good{color:var(--work)}
+  .pg .ctl-row{margin-top:12px}
+  .btables{margin-top:14px;display:flex;flex-direction:column;gap:6px;font-family:var(--mono);font-size:11.5px}
+  .bt-row{display:flex;align-items:center;gap:8px;color:var(--muted);flex-wrap:wrap}
+  .bt-row .who{width:26px;font-weight:700}
+  .bt-row .who.wA{color:var(--accent)} .bt-row .who.wB{color:var(--attn)}
+  .bt-row .who.wC{color:var(--teal)} .bt-row .who.wAp{color:var(--kv)}
+  .bchip{border:1px solid var(--border);border-radius:5px;padding:1px 6px;color:var(--text)}
+  .bchip.last{border-color:var(--faint)}
+  .bchip.x2{border-color:var(--oh);color:var(--oh)}
+
+  /* ---------- 6. since the book ---------- */
+  .sota-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:22px}
+  .scard{background:var(--panel2);border:1px solid var(--border);border-radius:12px;
+         padding:16px 18px;position:relative}
+  .scard .when{display:inline-block;font-family:var(--mono);font-size:10.5px;color:var(--accent);
+         background:var(--accent-dim);border-radius:5px;padding:2px 8px;margin-bottom:8px}
+  .scard h4{margin:0 0 8px;font-size:15px}
+  .scard p{margin:0;color:var(--muted);font-size:13px;line-height:1.6}
+  .scard p b{color:var(--text)}
+  .scard .tie{display:block;margin-top:10px;font-family:var(--mono);font-size:11px;color:var(--faint)}
+  .scard .tie b{color:var(--teal);font-weight:600}
+  @media(max-width:940px){ .sota-grid{grid-template-columns:1fr} }
+
+  footer{padding:44px 0 60px;border-top:1px solid var(--border);margin-top:56px}
+  .formula{font-family:var(--mono);font-size:14.5px;color:var(--muted);text-align:center;padding:8px 0 4px;line-height:1.9}
+  .formula b{color:var(--work)} .formula .bad{color:var(--oh)} .formula .dim{color:var(--faint)}
+  .fin{color:var(--faint);text-align:center;font-size:13px;margin-top:10px}
+
+  .reveal{opacity:0;transform:translateY(16px);transition:opacity .6s ease,transform .6s ease}
+  .reveal.in{opacity:1;transform:none}
+
+  @media(max-width:940px){
+    .sm-wrap{grid-template-columns:1fr}
+    .rad-wrap{grid-template-columns:1fr}
+    .pg-grid{grid-template-columns:1fr}
+    .pol-grid{grid-template-columns:1fr}
+  }
+  @media(prefers-reduced-motion:reduce){
+    *{transition:none!important;animation:none!important;scroll-behavior:auto}
+  }
+</style>
+</head>
+<body>
+
+<nav class="top"><div class="wrap">
+  <a href="#static">① Static batching</a>
+  <a href="#orca">② The Orca insight</a>
+  <a href="#sched">③ The scheduler</a>
+  <a href="#radix">④ Radix cache</a>
+  <a href="#paged">⑤ Paged KV memory</a>
+  <a href="#sota">⑥ Since the book</a>
+</div></nav>
+
+<header><div class="wrap">
+  <div class="kicker">GPU Inference · Chapter 7</div>
+  <h1>Continuous batching:<br>why serving systems <span class="hl">never wait</span> for a batch to finish</h1>
+  <p class="sub">Collect 8 requests, run them together, return all results, repeat. That's static batching —
+     and it wastes nearly half your GPU: fast requests sit through slow ones, new requests queue behind
+     entire batches, finished slots keep burning compute. The Orca paper's fix was almost embarrassingly
+     simple: <em>check after every single decode step</em>. This page simulates both, then builds the rest of
+     the scheduling stack — the request lifecycle, the radix prefix cache, and the paged KV memory that
+     makes it all fit.</p>
+  <div class="chips">
+    <div class="chip c1"><b>56%</b><span>slot utilization in the book's static example</span></div>
+    <div class="chip c2"><b>95%+</b><span>utilization with iteration-level scheduling</span></div>
+    <div class="chip c3"><b>36.9×</b><span>Orca throughput vs FasterTransformer (GPT-3 175B)</span></div>
+  </div>
+</div></header>
+
+<!-- ============ 1. STATIC BATCHING ============ -->
+<section id="static"><div class="wrap reveal">
+  <div class="kicker">Section 1 · Interactive</div>
+  <h2><span class="n">01</span>Static batching and its three wastes</h2>
+  <p class="lead">The server collects a batch of 8 and runs until <b>every</b> request in it finishes.
+     Three things go wrong: <b>early-completion waste</b> (a request that hits its stop token keeps its slot —
+     the hatched blocks below), <b>waiting waste</b> (requests 8–23 gray out entire batches away), and
+     <b>padding waste</b> (shorter prompts padded to the longest — prompt-side, not drawn here).
+     The book's 8-request example: 900 useful tokens out of 1,600 slot-tokens = <b>56%</b>.
+     This sim runs a deeper queue of 24 requests so you can watch the waste accumulate.</p>
+
+  <div class="panel">
+    <div class="sim-head">
+      <div class="ctl-row">
+        <button class="btn primary" id="stPlay">▶ Play</button>
+        <button class="btn" id="stStep">⏭ Step</button>
+        <button class="btn" id="stEnd">⏩ End</button>
+        <button class="btn" id="stReset">↺ Reset</button>
+      </div>
+      <div class="ctl-row">
+        <label for="stSpeed">speed</label>
+        <select id="stSpeed">
+          <option value="0.5">0.5×</option>
+          <option value="1">1×</option>
+          <option value="2" selected>2×</option>
+          <option value="4">4×</option>
+        </select>
+      </div>
+    </div>
+    <canvas class="gantt" id="stCanvas" role="img"
+      aria-label="Gantt simulation of static batching: finished requests hold their slots until the whole batch completes"></canvas>
+    <div class="sim-foot">
+      <div class="meters">
+        <div class="meter m-eff"><b id="stEff">–</b><span>slot efficiency</span></div>
+        <div class="meter m-blue"><b id="stWall">0</b><span>iterations</span></div>
+        <div class="meter"><b id="stThr">–</b><span>useful tok/s*</span></div>
+        <div class="meter m-bad"><b id="stWaste">–</b><span>wasted slot-tokens</span></div>
+      </div>
+      <div class="legend">
+        <span><i class="lg-gen"></i>generating</span>
+        <span><i class="lg-waste"></i>slot held, request done</span>
+        <span><i class="lg-wait"></i>waiting in queue</span>
+        <span><i class="lg-line"></i>now</span>
+      </div>
+    </div>
+    <div class="queues">
+      <span>batch: <span class="tagspan" id="stRun"><span class="tq">empty</span></span></span>
+      <span>waiting: <b id="stWait">24</b> requests</span>
+      <span>completed: <b id="stDone">0</b>/24</span>
+    </div>
+    <p class="note">* assuming the GPU produces <b>1000 tokens/s at full slot utilization</b> — so useful
+       throughput = 1000 × efficiency. Each row is one request <code>#id · output length</code>; the batch
+       drains only at the longest request's finish, three times in a row.</p>
+  </div>
+</div></section>
+
+<!-- ============ 2. ORCA ============ -->
+<section id="orca"><div class="wrap reveal">
+  <div class="kicker">Section 2 · Interactive</div>
+  <h2><span class="n">02</span>The Orca insight: schedule every iteration</h2>
+  <p class="lead">Orca (OSDI 2022) called it <em>iteration-level scheduling</em>: after <b>each forward
+     pass</b>, remove finished sequences, admit waiting ones, rebuild the batch. The batch composition
+     changes every step and the GPU never runs an idle slot while the queue is non-empty. Press play on
+     the <b>same 24 requests</b> and watch them drain before static even finishes its second batch
+     (dashed line marks static's finish at iteration 490).</p>
+
+  <div class="panel">
+    <div class="sim-head">
+      <div class="ctl-row">
+        <button class="btn primary" id="coPlay">▶ Play</button>
+        <button class="btn" id="coStep">⏭ Step</button>
+        <button class="btn" id="coEnd">⏩ End</button>
+        <button class="btn" id="coReset">↺ Reset</button>
+      </div>
+      <div class="ctl-row">
+        <label for="coSpeed">speed</label>
+        <select id="coSpeed">
+          <option value="0.5">0.5×</option>
+          <option value="1">1×</option>
+          <option value="2" selected>2×</option>
+          <option value="4">4×</option>
+        </select>
+      </div>
+    </div>
+    <canvas class="gantt" id="coCanvas" role="img"
+      aria-label="Gantt simulation of continuous batching: slots refill immediately as requests complete"></canvas>
+    <div class="sim-foot">
+      <div class="meters">
+        <div class="meter m-eff"><b id="coEff">–</b><span>slot efficiency</span></div>
+        <div class="meter m-blue"><b id="coWall">0</b><span>iterations</span></div>
+        <div class="meter"><b id="coThr">–</b><span>useful tok/s*</span></div>
+        <div class="meter m-bad"><b id="coVs">static: 490</b><span>iterations to beat</span></div>
+      </div>
+      <div class="legend">
+        <span><i class="lg-gen"></i>generating</span>
+        <span><i class="lg-wait"></i>waiting in queue</span>
+        <span><i class="lg-line"></i>now</span>
+        <span><i class="lg-mark"></i>static batching done (iter 490)</span>
+      </div>
+    </div>
+    <div class="queues">
+      <span>running: <span class="tagspan" id="coRun"><span class="tq">empty</span></span></span>
+      <span>waiting: <b id="coWait">16</b> requests</span>
+      <span>completed: <b id="coDone">0</b>/24</span>
+    </div>
+    <p class="note">Efficiency here counts idle tail slots too: near the end the queue empties and
+       running slots fall below 8 — under steady load (queue never empties) continuous batching holds
+       <b>95%+</b>. The mechanics that make this hard: each sequence owns a <b>KV cache</b> (freed on
+       completion), attention masks must stop cross-sequence attention in the merged batch, and every
+       sequence tracks its <b>own position</b>, not a batch-global one. Orca reported 36.9× throughput
+       over FasterTransformer on GPT-3 175B — bigger gains with variable output lengths, high request
+       rates, and larger batches.</p>
+  </div>
+</div></section>
+
+<!-- ============ 3. SCHEDULER ============ -->
+<section id="sched"><div class="wrap reveal">
+  <div class="kicker">Section 3 · Interactive</div>
+  <h2><span class="n">03</span>The scheduler: states, policies, preemption</h2>
+  <p class="lead">Continuous batching made the scheduler the brain of the system: it decides who runs,
+     who waits, and who gets kicked. Every request walks the lifecycle below —
+     <b>click any state</b> to see what the scheduler knows and where its KV cache lives.</p>
+
+  <div class="panel">
+    <div class="sm-wrap">
+      <div>
+        <svg class="states" viewBox="0 0 760 300" role="group" aria-label="Request lifecycle state diagram">
+          <defs>
+            <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="#4b5a6e"></path>
+            </marker>
+          </defs>
+          <path class="arrow" d="M150,148 H222" marker-end="url(#arr)"></path>
+          <path class="arrow" d="M366,58 H412" marker-end="url(#arr)"></path>
+          <path class="arrow" d="M556,58 H602" marker-end="url(#arr)"></path>
+          <path class="arrow dash" d="M490,92 V196" marker-end="url(#arr)"></path>
+          <path class="arrow dash" d="M406,232 C300,262 190,240 96,184" marker-end="url(#arr)"></path>
+          <text x="500" y="148" class="arrow" text-anchor="start">preempt</text>
+          <text x="240" y="266" class="arrow" text-anchor="start">re-queue at front</text>
+          <text x="156" y="140" class="arrow" text-anchor="middle">prefill</text>
+          <text x="388" y="50" class="arrow" text-anchor="middle">first token</text>
+          <text x="580" y="50" class="arrow" text-anchor="middle">stop / len</text>
+
+          <g class="smstate" id="stg-waiting" data-k="waiting" tabindex="0" role="button" aria-label="Waiting state">
+            <rect x="22" y="120" width="128" height="56" rx="11"></rect>
+            <text x="86" y="145" text-anchor="middle">WAITING</text>
+            <text x="86" y="163" text-anchor="middle" class="sub2">queued · no KV</text>
+          </g>
+          <g class="smstate" id="stg-prefilling" data-k="prefilling" tabindex="0" role="button" aria-label="Prefilling state">
+            <rect x="238" y="30" width="128" height="56" rx="11"></rect>
+            <text x="302" y="55" text-anchor="middle">PREFILLING</text>
+            <text x="302" y="73" text-anchor="middle" class="sub2">builds KV cache</text>
+          </g>
+          <g class="smstate" id="stg-decoding" data-k="decoding" tabindex="0" role="button" aria-label="Decoding state">
+            <rect x="428" y="30" width="128" height="56" rx="11"></rect>
+            <text x="492" y="55" text-anchor="middle">DECODING</text>
+            <text x="492" y="73" text-anchor="middle" class="sub2">1 token / step</text>
+          </g>
+          <g class="smstate sel-green" id="stg-completed" data-k="completed" tabindex="0" role="button" aria-label="Completed state">
+            <rect x="618" y="30" width="128" height="56" rx="11"></rect>
+            <text x="682" y="55" text-anchor="middle">COMPLETED</text>
+            <text x="682" y="73" text-anchor="middle" class="sub2">cache freed</text>
+          </g>
+          <g class="smstate" id="stg-preempted" data-k="preempted" tabindex="0" role="button" aria-label="Preempted state">
+            <rect x="428" y="200" width="128" height="56" rx="11"></rect>
+            <text x="492" y="225" text-anchor="middle">PREEMPTED</text>
+            <text x="492" y="243" text-anchor="middle" class="sub2">KV → CPU RAM</text>
+          </g>
+        </svg>
+      </div>
+      <div class="sm-detail">
+        <h4 id="smTitle">DECODING</h4>
+        <p id="smText">Generating tokens one at a time; the KV cache grows by one entry per layer per
+           step. This is where requests live almost their entire life — and where iteration-level
+           scheduling checks for completion after every single step.</p>
+        <div class="kvline" id="smKv">KV cache: on GPU, growing · position advances 1/step</div>
+      </div>
+    </div>
+
+    <div class="pol-grid">
+      <div class="pol">
+        <h4><code>FCFS</code> — first come, first served</h4>
+        <p>Fair and simple, but one long request can block many short ones. The baseline every
+           scheduler starts from.</p>
+      </div>
+      <div class="pol">
+        <h4><code>SJF</code> — shortest job first</h4>
+        <p>Minimizes average latency, but output lengths are unknown in advance — heuristics
+           (prompt similarity, request history) estimate them.</p>
+      </div>
+      <div class="pol">
+        <h4><code>Priority</code> — + preemption</h4>
+        <p>Latency-sensitive requests jump the queue; victims are swapped out (KV cache to CPU
+           memory or disk) and resume without re-prefilling. Production = hybrids: priority tiers,
+           deadline awareness, starvation guards.</p>
+      </div>
+    </div>
+
+    <div class="stage">
+      <button class="btn" id="smPreempt">⚡ High-priority request arrives</button>
+      <ol id="smSteps">
+        <li>premium request admitted</li>
+        <li>batch full → victim = <b>lowest priority</b></li>
+        <li>victim's KV cache swapped to CPU RAM</li>
+        <li>victim re-queued at <b>front</b> of WAITING</li>
+      </ol>
+    </div>
+  </div>
+</div></section>
+
+<!-- ============ 4. RADIX CACHE ============ -->
+<section id="radix"><div class="wrap reveal">
+  <div class="kicker">Section 4 · Interactive</div>
+  <h2><span class="n">04</span>Radix cache: prefixes are money</h2>
+  <p class="lead">Chat requests share prefixes — system prompts, few-shot examples, earlier turns.
+     A radix tree keyed on token prefixes lets request two reuse the KV cache that request one already
+     computed. <b>Send each request</b> and watch the walk: green nodes are cache hits (KV reused),
+     orange tokens must actually be prefilled. Then trim memory and see what LRU eviction costs.</p>
+
+  <div class="panel">
+    <div class="rad-wrap">
+      <div>
+        <div class="tree" id="radTree" aria-live="polite"></div>
+        <div class="meters" style="margin-top:14px">
+          <div class="meter m-bad"><b id="radNoCache">0</b><span>tokens without cache</span></div>
+          <div class="meter m-eff"><b id="radCached">0</b><span>tokens actually prefilled</span></div>
+          <div class="meter m-blue"><b id="radSaved">–</b><span>compute saved</span></div>
+        </div>
+      </div>
+      <div class="rad-side">
+        <div class="rad-reqs">
+          <button class="btn" id="radR1">POST /v1 · "Capital of France?"<small>system prompt + 3 tokens</small></button>
+          <button class="btn" id="radR2">POST /v1 · "Capital of Germany?"<small>same system prompt — should be nearly free</small></button>
+          <button class="btn" id="radR3">POST /v1 · "Capital of Spain?"<small>same system prompt again</small></button>
+          <button class="btn" id="radR4">turn 2 · "…France? What is its population?"<small>multi-turn: reuses the entire previous turn</small></button>
+        </div>
+        <div class="rad-log" id="radLog">requests will appear here…</div>
+        <div class="ctl-row">
+          <button class="btn" id="radTrim">🗜 Trim memory (LRU evict)</button>
+          <button class="btn" id="radReset">↺ Reset</button>
+        </div>
+      </div>
+    </div>
+    <p class="note">Only nodes with <b>reference count 0</b> can be evicted — active requests hold refs
+       along their path. Real-world savings from the book: chat with system prompts <b>20–40%</b> of
+       prefill compute, multi-turn conversations <b>50%+</b>, templated batch work <b>70%+</b>.
+       SGLang's RadixAttention was the production implementation — by 2025–26 this stopped being a
+       differentiator: <b>§6</b> — prefix caching now ships on by default everywhere.</p>
+  </div>
+</div></section>
+
+<!-- ============ 5. PAGED MEMORY ============ -->
+<section id="paged"><div class="wrap reveal">
+  <div class="kicker">Section 5 · Interactive</div>
+  <h2><span class="n">05</span>Paged KV memory: fragmentation → block tables</h2>
+  <p class="lead">Sequences have unknown, variable final lengths. Pre-allocating contiguous KV space
+     either wastes memory or fragments it into unusable holes. vLLM's <b>PagedAttention</b> borrows from
+     OS virtual memory: fixed-size <code>blocks</code>, one <b>block table</b> per sequence, any free block
+     usable by anyone.</p>
+
+  <div class="panel">
+    <div class="pg-grid">
+      <div class="pg">
+        <h4>Naive contiguous allocation <span class="tag t-bad">fragments</span></h4>
+        <p class="desc">Each sequence gets one contiguous run of KV memory. Step through allocations,
+           free one, then try to fit a bigger request.</p>
+        <div class="pool" id="pgPoolA" style="grid-template-columns:repeat(8,1fr)"></div>
+        <div class="cap" id="pgACap">pool: 32 units · 8 free</div>
+        <div class="ctl-row">
+          <button class="btn primary" id="pgANext">▶ Next</button>
+          <button class="btn" id="pgAReset">↺ Reset</button>
+        </div>
+      </div>
+      <div class="pg">
+        <h4>PagedAttention blocks <span class="tag t-good">no fragmentation</span></h4>
+        <p class="desc">KV cache lives in fixed 4-token blocks (vLLM uses 16). Sequences grow by
+           grabbing any free block; waste ≤ 1 block each. Fork, then grow the fork — copy-on-write
+           copies only the block that must change.</p>
+        <div class="pool" id="pgPoolB"></div>
+        <div class="btables" id="pgTables"></div>
+        <div class="cap" id="pgBCap">free blocks: 13/16</div>
+        <div class="ctl-row">
+          <button class="btn" id="pbGrowA">Grow A +4</button>
+          <button class="btn" id="pbFork">⑂ Fork A → A′</button>
+          <button class="btn" id="pbGrowA2">Grow A′ +1</button>
+          <button class="btn" id="pbReset">↺ Reset</button>
+        </div>
+      </div>
+    </div>
+    <p class="note">Paged attention needs kernels that follow the indirection —
+       <b>FlashInfer</b>'s paged kernels take the <code>kv_indices</code> page table directly
+       (Chapter 6). Copy-on-write is what makes beam search and parallel sampling cheap: siblings
+       share every block until one of them writes. In 2026 the same block tables reach
+       <b>off-GPU tiers</b> — pinned CPU RAM, SSD, object stores — see <b>§6</b>.</p>
+  </div>
+</div></section>
+
+<!-- ============ 6. SINCE THE BOOK ============ -->
+<section id="sota"><div class="wrap reveal">
+  <div class="kicker">Section 6 · October 2026</div>
+  <h2><span class="n">06</span>Since the book: serving in 2026</h2>
+  <p class="lead">Nothing on this page got old — it got <b>promoted</b>. Between the book's stack
+     (Orca '22, vLLM '23, SGLang '24) and today, every idea above became either a shipping default
+     or the foundation the field builds on. Six things that changed, each tied back to the section
+     it grew out of.</p>
+
+  <div class="panel">
+    <div class="sota-grid">
+      <div class="scard">
+        <span class="when">2025 → 2026</span>
+        <h4>Prefix caching became the default</h4>
+        <p>The vLLM V1 rewrite (Jan 2025) ships <b>near-zero-overhead prefix caching on by
+           default</b>. SGLang's radix tree now covers every model and moved to a Rust core, with
+           branching-point caching lifting token hit-rate from <b>43.8% → 60.8%</b>. Schedulers went
+           cache-aware: vLLM now schedules requests that already hold KV blocks first.</p>
+        <span class="tie">← grows <b>§4 radix cache</b>: the tree stopped being a differentiator</span>
+      </div>
+      <div class="scard">
+        <span class="when">FAST '25 → 2026</span>
+        <h4>Prefill and decode moved to separate machines</h4>
+        <p>The book's appendix note became the production pattern: <b>Mooncake</b> (Kimi, FAST '25),
+           <b>NVIDIA Dynamo</b> (GTC '25), DistServe. vLLM shipped a KV-affinity router (Dec 2025),
+           an official disaggregation guide (Sep 2026), push-based <b>RDMA</b> KV transfer, and
+           bi-directional KV reuse for multi-turn agents — up to <b>3.3× lower TTFT</b>.</p>
+        <span class="tie">← grows <b>§2</b>: the two phases are now physically split</span>
+      </div>
+      <div class="scard">
+        <span class="when">2025 → 2026</span>
+        <h4>Speculative decoding went mainstream</h4>
+        <p>The appendix's "next frontier" preview is now standard equipment: MTP (DeepSeek),
+           EAGLE-3 with a draft-training library, parallel drafting (P-EAGLE, DSpark, DFlash) and
+           adaptive verification. In production, GLM-5.2 with disaggregation + MTP cut TPOT from
+           <b>40 ms → 17 ms</b>; DSpark sustains <b>~384 tok/s</b> at acceptance length ≈ 5.</p>
+        <span class="tie">← grows the appendix preview: verify-in-parallel is everywhere</span>
+      </div>
+      <div class="scard">
+        <span class="when">2026</span>
+        <h4>The KV cache escaped the GPU</h4>
+        <p>Paged blocks (§5) now span tiers: pinned CPU memory, SSD, even object stores — vLLM's
+           tiered offloading and SGLang's runtime-attachable L3 caches. HiSparse keeps
+           long-context pages host-resident (<b>+58% throughput</b>), and KV itself went low-
+           precision: <b>FP8 by default</b>, NVFP4 and 4-bit on newer hardware.</p>
+        <span class="tie">← grows <b>§5 paged memory</b>: the block table now points off-GPU</span>
+      </div>
+      <div class="scard">
+        <span class="when">2025 → 2026</span>
+        <h4>Schedulers went async-first</h4>
+        <p>Chapter 8's overlap scheduling preview became the architecture: vLLM's Model Runner V2
+           (default since Sep 2026) rebuilt the engine around <b>persistent batching, async
+           scheduling and GPU-native input prep</b>; SGLang reached "zero-overhead" scheduling via
+           CUDA-graphable spec-verify; DeepSeek's wide-EP setup serves at <b>2.2k tok/s per H200</b>.</p>
+        <span class="tie">← grows <b>§3</b>: the scheduler is no longer on the critical path</span>
+      </div>
+      <div class="scard">
+        <span class="when">2025 → 2026</span>
+        <h4>Hybrid attention rewrote the caching rules</h4>
+        <p>Linear/hybrid models (Qwen3-Next, Kimi K3 KDA, DeepSeek sparse attention) keep
+           <b>recurrent state, not plain K/V</b> — so engines now cache internal-state checkpoints
+           (Mamba prefill checkpoints alone give <b>+9–25% TTFT</b>). Decode Context Parallelism
+           shards KV along the sequence (<b>3×</b> on long context), and Rubin NVL72 got day-0
+           support claiming <b>7.8× per-GPU</b> over GB200.</p>
+        <span class="tie">← grows <b>§4 + §5</b>: new models, new things worth caching</span>
+      </div>
+    </div>
+    <p class="note">Sources, checked Oct 2026: <b>vllm.ai/blog</b> and vLLM release notes (v0.29–v0.32),
+       SGLang releases (v0.5.14–v0.5.21), Mooncake (FAST '25), DistServe (OSDI-best-paper line of work),
+       NVIDIA Dynamo. Numbers are the projects' own published figures.</p>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <div class="formula">
+    slot efficiency <span class="dim">=</span> useful tokens <span class="dim">/</span> (slots × iterations)
+    &nbsp;&nbsp;<span class="dim">·</span>&nbsp;&nbsp;
+    static <span class="bad">~56%</span> <span class="dim">→</span> continuous <b>95%+</b><br>
+    <span class="dim">Orca (OSDI '22):</span> 36.9× <span class="dim">throughput vs FasterTransformer · GPT-3 175B</span>
+    &nbsp;&nbsp;<span class="dim">·</span>&nbsp;&nbsp;
+    <span class="dim">paged KV waste:</span> ≤ 1 block <span class="dim">per sequence</span>
+  </div>
+  <p class="fin">Chapter 7 · Continuous Batching — companion to <code>book/07-continuous-batching.md</code>.
+     §6 survey updated October 2026. Next: Chapter 8 — chunked prefill, mixed batches, CUDA graphs, overlap scheduling.</p>
+</div></footer>
+
+<script>
+(function(){
+"use strict";
+
+/* ================= reveal on scroll ================= */
+var io = ("IntersectionObserver" in window)
+  ? new IntersectionObserver(function(es){
+      es.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add("in"); io.unobserve(e.target);} });
+    }, {threshold:.12})
+  : null;
+document.querySelectorAll(".reveal").forEach(function(el){ io ? io.observe(el) : el.classList.add("in"); });
+
+/* =====================================================
+   1+2. BATCHING SIMULATOR (shared engine, two modes)
+   ===================================================== */
+var REQ_LENS = [50,100,75,200,50,150,75,200,        // batch 1 — the book's example
+                120,60,90,40,150,80,110,70,         // queued batch 2
+                100,45,130,85,60,140,95,55];        // queued batch 3
+var MAXB = 8, XMAX = 520, STATIC_WALL = 490;        // 200+150+140
+
+function Sim(mode, canvas, ui){
+  this.mode = mode; this.canvas = canvas; this.ui = ui;
+  this.ctx = canvas.getContext("2d");
+  this.playing = false; this.raf = null; this.frame = 0;
+  var self = this;
+  window.addEventListener("resize", function(){ self.sizeCanvas(); self.draw(); });
+  this.sizeCanvas();
+  this.reset();
+}
+Sim.prototype.sizeCanvas = function(){
+  var dpr = window.devicePixelRatio || 1;
+  var w = this.canvas.clientWidth || 900;
+  this.canvas.width = Math.round(w * dpr);
+  this.canvas.height = Math.round(560 * dpr);
+  this.ctx.setTransform(dpr,0,0,dpr,0,0);
+  this.W = w; this.H = 560;
+};
+Sim.prototype.reset = function(){
+  this.reqs = REQ_LENS.map(function(len,i){
+    return {id:i, len:len, rem:len, admit:null, done:null, rel:null};
+  });
+  this.running = []; this.waiting = this.reqs.slice();
+  this.step = 0; this.useful = 0; this.slots = 0; this.doneCount = 0;
+  this.finished = false; this.batchEnd = null;
+  this.admit(); this.draw(); this.uiUpdate();
+};
+Sim.prototype.admit = function(){
+  while(this.running.length < MAXB && this.waiting.length){
+    var r = this.waiting.shift();
+    r.admit = this.step; this.running.push(r);
+  }
+  if(this.mode === "static" && this.running.length){
+    var m = 0;
+    this.running.forEach(function(r){ m = Math.max(m, r.admit + r.len); });
+    this.batchEnd = m;
+  }
+};
+Sim.prototype.tick = function(){
+  if(this.finished) return;
+  var self = this;
+  this.running.forEach(function(r){
+    if(r.done === null){ r.rem--; self.useful++; if(r.rem <= 0) r.done = self.step; }
+  });
+  this.slots += this.running.length;
+  this.step++;
+  if(this.mode === "static"){
+    if(this.step >= this.batchEnd){
+      this.running.forEach(function(r){ r.rel = self.batchEnd; });
+      this.doneCount += this.running.length;
+      this.running = []; this.batchEnd = null;
+      this.admit();
+      if(this.running.length === 0) this.finished = true;
+    }
+  } else {
+    var doneNow = this.running.filter(function(r){ return r.done !== null; });
+    if(doneNow.length){
+      this.running = this.running.filter(function(r){ return r.done === null; });
+      doneNow.forEach(function(r){ r.rel = r.done; });
+      this.doneCount += doneNow.length;
+      this.admit();
+    }
+    if(this.running.length === 0 && this.waiting.length === 0) this.finished = true;
+  }
+  this.draw(); this.uiUpdate();
+};
+Sim.prototype.x = function(t){
+  var padL = 74, padR = 14;
+  return padL + (t / XMAX) * (this.W - padL - padR);
+};
+Sim.prototype.hatch = (function(){
+  var p = document.createElement("canvas"); p.width = p.height = 8;
+  var c = p.getContext("2d");
+  c.strokeStyle = "rgba(255,144,64,.85)"; c.lineWidth = 2;
+  c.beginPath(); c.moveTo(-2,10); c.lineTo(10,-2); c.moveTo(-2,6); c.lineTo(6,-2); c.stroke();
+  return p;
+})();
+Sim.prototype.draw = function(){
+  var ctx = this.ctx, self = this;
+  ctx.clearRect(0,0,this.W,this.H);
+  var n = REQ_LENS.length, top = 12, rowH = (this.H - top - 26) / n;
+  var pat = ctx.createPattern(this.hatch, "repeat");
+
+  // grid lines + iteration labels every 100 steps
+  ctx.strokeStyle = "rgba(30,42,60,.8)"; ctx.lineWidth = 1;
+  ctx.fillStyle = "#4b5a6e"; ctx.font = "10px Consolas,monospace"; ctx.textAlign = "center";
+  for(var t = 0; t <= XMAX; t += 100){
+    var gx = this.x(t);
+    ctx.beginPath(); ctx.moveTo(gx, top); ctx.lineTo(gx, this.H-24); ctx.stroke();
+    ctx.fillText(String(t), gx, this.H-10);
+  }
+  // static-finish marker on the continuous sim
+  if(this.mode === "cont"){
+    var mx = this.x(STATIC_WALL);
+    ctx.strokeStyle = "#ff9040"; ctx.setLineDash([6,5]); ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.moveTo(mx, top-4); ctx.lineTo(mx, this.H-6); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#ff9040"; ctx.textAlign = "left"; ctx.font = "10px Consolas,monospace";
+    ctx.fillText("static done @490", mx+6, top+6);
+  }
+
+  this.reqs.forEach(function(r, i){
+    var y = top + i * rowH, h = Math.max(rowH - 3, 4);
+    // row label
+    ctx.fillStyle = "#7d8ca0"; ctx.textAlign = "right"; ctx.font = "10px Consolas,monospace";
+    ctx.fillText("#"+r.id+" · "+r.len, 66, y + h/2 + 3);
+    // waiting segment
+    if(r.admit !== null && r.admit > 0){
+      ctx.fillStyle = "#2a3547";
+      ctx.fillRect(self.x(0), y, self.x(r.admit)-self.x(0), h);
+    }
+    if(r.admit === null){
+      ctx.fillStyle = "#2a3547";
+      ctx.fillRect(self.x(0), y, self.x(self.step)-self.x(0), h);
+      return;
+    }
+    // generating segment
+    var genEnd = (r.done !== null) ? r.done : self.step;
+    ctx.fillStyle = "#3fb950";
+    ctx.fillRect(self.x(r.admit), y, self.x(genEnd)-self.x(r.admit), h);
+    // held-after-done segment (static only)
+    var wasteStart = (r.done !== null) ? Math.max(r.done, r.admit) : null;
+    var wasteEnd = (r.rel !== null) ? r.rel : self.step;
+    if(wasteStart !== null && wasteEnd > wasteStart){
+      ctx.fillStyle = pat;
+      ctx.fillRect(self.x(wasteStart), y, self.x(wasteEnd)-self.x(wasteStart), h);
+    }
+  });
+
+  // playhead
+  if(this.step > 0){
+    var px = this.x(this.step);
+    ctx.strokeStyle = "#58a6ff"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(px, top-6); ctx.lineTo(px, this.H-24); ctx.stroke();
+    ctx.fillStyle = "#58a6ff"; ctx.textAlign = "center"; ctx.font = "10px Consolas,monospace";
+    ctx.fillText("t="+this.step, px, Math.max(top-10, 10));
+  }
+};
+Sim.prototype.uiUpdate = function(){
+  // efficiency against full GPU capacity (MAXB × iterations) so both modes are comparable
+  var u = this.ui, eff = this.step ? (100*this.useful/(MAXB*this.step)) : 0;
+  u.elEff.textContent = this.slots ? eff.toFixed(0)+"%" : "–";
+  u.elWall.textContent = String(this.step);
+  // 1000 tok/s at full slot utilization → useful tok/s = 1000 × efficiency
+  u.elThr.textContent = this.slots ? String(Math.round(10*eff)) : "–";
+  if(u.elWaste) u.elWaste.textContent = String(this.slots - this.useful);
+  u.elDone.textContent = String(this.doneCount);
+  u.elWait.textContent = String(this.waiting.length);
+  var run = u.elRun;
+  run.innerHTML = "";
+  if(this.running.length === 0){
+    var e = document.createElement("span"); e.className="tq"; e.textContent="empty";
+    run.appendChild(e);
+  } else {
+    this.running.slice(0,10).forEach(function(r){
+      var s = document.createElement("span");
+      s.className = "tq" + (r.done !== null ? " dq" : "");
+      s.textContent = "#"+r.id + (r.done !== null ? "✓" : "");
+      run.appendChild(s);
+    });
+  }
+  if(this.finished){
+    u.btnPlay.textContent = "✓ done"; u.btnPlay.disabled = true;
+  } else {
+    u.btnPlay.disabled = false;
+    u.btnPlay.textContent = this.playing ? "⏸ Pause" : "▶ Play";
+  }
+};
+Sim.prototype.togglePlay = function(){
+  if(this.finished) return;
+  var self = this;
+  this.playing = !this.playing;
+  if(this.playing){
+    var speed = parseFloat(this.speedSel.value);
+    var loopFn = function(){
+      if(!self.playing) return;
+      self.frame++;
+      var spf = speed >= 1 ? speed : 1;
+      if(speed >= 1 || self.frame % 2 === 0){
+        for(var k=0; k<spf; k++){ if(!self.finished) self.tick(); }
+      }
+      if(self.playing) self.raf = requestAnimationFrame(loopFn);
+    };
+    this.raf = requestAnimationFrame(loopFn);
+    this.uiUpdate();
+  } else {
+    if(this.raf) cancelAnimationFrame(this.raf);
+    this.uiUpdate();
+  }
+};
+Sim.prototype.toEnd = function(){
+  this.playing = false;
+  if(this.raf) cancelAnimationFrame(this.raf);
+  var guard = 0;
+  while(!this.finished && guard++ < 5000) this.tick();
+};
+
+function setupSim(mode, ids){
+  var canvas = document.getElementById(ids.canvas);
+  var sim = new Sim(mode, canvas, {
+    elEff:  document.getElementById(ids.eff),
+    elWall: document.getElementById(ids.wall),
+    elThr:  document.getElementById(ids.thr),
+    elWaste:ids.waste ? document.getElementById(ids.waste) : null,
+    elRun:  document.getElementById(ids.run),
+    elWait: document.getElementById(ids.wait),
+    elDone: document.getElementById(ids.done),
+    btnPlay:document.getElementById(ids.play)
+  });
+  sim.speedSel = document.getElementById(ids.speed);
+  document.getElementById(ids.play).addEventListener("click", function(){ sim.togglePlay(); });
+  document.getElementById(ids.step).addEventListener("click", function(){
+    sim.playing=false; if(sim.raf) cancelAnimationFrame(sim.raf); sim.tick();
+  });
+  document.getElementById(ids.end).addEventListener("click", function(){ sim.toEnd(); });
+  document.getElementById(ids.reset).addEventListener("click", function(){
+    sim.playing=false; if(sim.raf) cancelAnimationFrame(sim.raf); sim.reset();
+  });
+  return sim;
+}
+setupSim("static", {canvas:"stCanvas", eff:"stEff", wall:"stWall", thr:"stThr", waste:"stWaste",
+                    run:"stRun", wait:"stWait", done:"stDone", play:"stPlay", step:"stStep",
+                    end:"stEnd", reset:"stReset", speed:"stSpeed"});
+setupSim("cont",   {canvas:"coCanvas", eff:"coEff", wall:"coWall", thr:"coThr", waste:null,
+                    run:"coRun", wait:"coWait", done:"coDone", play:"coPlay", step:"coStep",
+                    end:"coEnd", reset:"coReset", speed:"coSpeed"});
+
+/* =====================================================
+   3. SCHEDULER STATE MACHINE
+   ===================================================== */
+var SM = {
+  waiting:   {t:"WAITING", c:"", p:"Received but not started. Prompt tokens are known; nothing has been computed. The scheduler tracks it in a queue with an admission decision: is there a free batch slot AND enough KV memory for the prompt?",
+              kv:"KV cache: none allocated"},
+  prefilling:{t:"PREFILLING", c:"", p:"The whole prompt runs through the model in one parallel pass (Chapter 2). This step is compute-bound GEMM — and it builds the sequence's initial KV cache as a side effect.",
+              kv:"KV cache: being written, prompt-length"},
+  decoding:  {t:"DECODING", c:"", p:"One token per forward pass, memory-bound GEMV. The KV cache grows by one entry per layer per step. Iteration-level scheduling checks for completion after every step here — that's the whole Orca trick.",
+              kv:"KV cache: on GPU, growing 1 token/step"},
+  completed: {t:"COMPLETED", c:"sel-green", p:"Hit a stop token or max length. Results stream back and the KV cache is freed for reuse — or kept a while longer if the radix cache (Section 4) wants its prefix.",
+              kv:"KV cache: freed (or radix-cached)"},
+  preempted: {t:"PREEMPTED", c:"sel-oh", p:"Temporarily stopped to make room for a higher-priority request. The KV cache is swapped to CPU memory or disk so the request can resume later without re-processing its prompt — it re-joins the FRONT of the waiting queue.",
+              kv:"KV cache: swapped to CPU RAM (or recomputed)"}
+};
+var smStates = document.querySelectorAll(".smstate");
+function smSelect(k){
+  smStates.forEach(function(g){ g.classList.remove("sel","sel-green","sel-oh"); });
+  var g = document.getElementById("stg-"+k);
+  if(g && SM[k].c) g.classList.add(SM[k].c); else if(g) g.classList.add("sel");
+  document.getElementById("smTitle").textContent = SM[k].t;
+  document.getElementById("smText").textContent = SM[k].p;
+  document.getElementById("smKv").textContent = SM[k].kv;
+}
+smStates.forEach(function(g){
+  var k = g.getAttribute("data-k");
+  g.addEventListener("click", function(){ smSelect(k); });
+  g.addEventListener("keydown", function(ev){
+    if(ev.key === "Enter" || ev.key === " "){ ev.preventDefault(); smSelect(k); }
+  });
+});
+smSelect("decoding");
+
+var smBtn = document.getElementById("smPreempt"), smLis = document.querySelectorAll("#smSteps li"), smTimer = null;
+smBtn.addEventListener("click", function(){
+  smLis.forEach(function(li){ li.classList.remove("on"); });
+  smSelect("decoding");
+  var i = 0;
+  if(smTimer) clearInterval(smTimer);
+  smTimer = setInterval(function(){
+    if(i > 0) smLis[i-1].classList.add("on");
+    if(i === 1) smSelect("preempted");
+    if(i === 3) smSelect("waiting");
+    if(i >= smLis.length){ clearInterval(smTimer); smTimer = null; smLis[smLis.length-1].classList.add("on"); return; }
+    i++;
+  }, 700);
+});
+
+/* =====================================================
+   4. RADIX CACHE
+   ===================================================== */
+var SYS = ["⟨sys⟩","You","are","a","helpful","assistant.","Be","concise."];
+var RAD_REQS = {
+  r1:{label:'R1 "Capital of France?"',            toks: SYS.concat(["Capital","of","France?"])},
+  r2:{label:'R2 "Capital of Germany?"',           toks: SYS.concat(["Capital","of","Germany?"])},
+  r3:{label:'R3 "Capital of Spain?"',             toks: SYS.concat(["Capital","of","Spain?"])},
+  r4:{label:'R4 turn 2 "…population?"',           toks: SYS.concat(["Capital","of","France?","What","is","its","population?"])}
+};
+var rad = { root:null, noCache:0, cached:0, tick:0, busy:false };
+
+function rNode(tokens, parent){
+  return {tokens:tokens, children:[], parent:parent||null, ref:0, used:0};
+}
+function lcp(a,b){ var i=0; while(i<a.length && i<b.length && a[i]===b[i]) i++; return i; }
+
+function radInsert(toks){
+  // returns {node, path:[nodes...root→parent of node], matched:#tokens reused}
+  var node = rad.root, consumed = 0, path = [];
+  for(var guard=0; guard<50; guard++){
+    var best = null, bestLen = 0;
+    for(var i=0;i<node.children.length;i++){
+      var c = node.children[i];
+      var l = lcp(c.tokens, toks.slice(consumed));
+      if(l > bestLen){ best = c; bestLen = l; }
+    }
+    if(!best){
+      var n = rNode(toks.slice(consumed), node);
+      node.children.push(n);
+      return {node:n, path:path, matched:consumed};
+    }
+    if(bestLen < best.tokens.length){
+      var split = rNode(best.tokens.slice(0,bestLen), node);
+      best.tokens = best.tokens.slice(bestLen);
+      best.parent = split;
+      split.children.push(best);
+      node.children.splice(node.children.indexOf(best),1,split);
+      consumed += bestLen; path.push(split);
+      if(consumed === toks.length) return {node:split, path:path, matched:consumed};
+      node = split;
+      continue;
+    }
+    consumed += bestLen; path.push(best);
+    if(consumed === toks.length) return {node:best, path:path, matched:consumed};
+    node = best;
+  }
+  return {node:rad.root, path:[], matched:0};
+}
+
+function radBuild(freshNode){
+  var box = document.getElementById("radTree");
+  box.innerHTML = "";
+  function build(n, container, isRoot){
+    var wrapEl = document.createElement("div");
+    var el = document.createElement("div");
+    el.className = "tnode" + (isRoot ? " root" : "");
+    if(isRoot){
+      var r0 = document.createElement("span"); r0.className = "tk"; r0.textContent = "root";
+      el.appendChild(r0);
+    }
+    n.tokens.forEach(function(t){
+      var s = document.createElement("span"); s.className = "tk"; s.textContent = t; el.appendChild(s);
+    });
+    if(n.ref > 0){
+      var r = document.createElement("span"); r.className = "ref"; r.textContent = "live×"+n.ref;
+      el.appendChild(r);
+    }
+    if(n === freshNode) el.classList.add("new");
+    n.el = el;                                   // kept so pulses can target the live element
+    wrapEl.appendChild(el);
+    container.appendChild(wrapEl);
+    if(n.children.length){
+      var kids = document.createElement("div"); kids.className = "tkids";
+      n.children.forEach(function(c){ build(c, kids, false); });
+      wrapEl.appendChild(kids);
+    }
+  }
+  build(rad.root, box, true);
+}
+function radMeters(){
+  document.getElementById("radNoCache").textContent = String(rad.noCache);
+  document.getElementById("radCached").textContent  = String(rad.cached);
+  document.getElementById("radSaved").textContent =
+    rad.noCache ? Math.round(100*(1 - rad.cached/rad.noCache))+"%" : "–";
+}
+function radReset(){
+  rad.root = rNode([], null);
+  rad.noCache = 0; rad.cached = 0; rad.tick = 0; rad.busy = false;
+  document.getElementById("radLog").innerHTML = "requests will appear here…";
+  ["radR1","radR2","radR3","radR4"].forEach(function(id){
+    document.getElementById(id).disabled = false;
+  });
+  radBuild(null); radMeters();
+}
+function radSend(key, btnId){
+  if(rad.busy) return;
+  rad.busy = true; rad.tick++;
+  var req = RAD_REQS[key];
+  document.getElementById(btnId).disabled = true;
+  var res = radInsert(req.toks);
+  var computed = req.toks.length - res.matched;
+  var isNew = res.matched < req.toks.length;
+  rad.noCache += req.toks.length;
+  rad.cached  += computed;
+
+  document.getElementById("radLog").innerHTML =
+    "<b>"+req.label+"</b> — matched <b>"+res.matched+"</b> cached tokens, prefill <span class='miss'>"
+    +computed+"</span> new";
+
+  // hold refs on the request's path (matched nodes + the fresh one)
+  var chain = res.path.slice();
+  if(isNew) chain.push(res.node);
+  chain.forEach(function(n){ n.ref++; });
+  radBuild(isNew ? res.node : null);
+
+  // pulse cache-hit nodes green, top-down
+  var stepI = 0, hits = res.path;
+  var timer = setInterval(function(){
+    if(stepI < hits.length){ hits[stepI].el.classList.add("hit"); stepI++; }
+    else {
+      clearInterval(timer);
+      setTimeout(function(){
+        chain.forEach(function(n){ n.ref--; n.used = rad.tick; });
+        radBuild(null); radMeters(); rad.busy = false;
+      }, 600);
+    }
+  }, 170);
+}
+
+document.getElementById("radR1").addEventListener("click", function(){ radSend("r1","radR1"); });
+document.getElementById("radR2").addEventListener("click", function(){ radSend("r2","radR2"); });
+document.getElementById("radR3").addEventListener("click", function(){ radSend("r3","radR3"); });
+document.getElementById("radR4").addEventListener("click", function(){ radSend("r4","radR4"); });
+document.getElementById("radReset").addEventListener("click", radReset);
+document.getElementById("radTrim").addEventListener("click", function(){
+  // evict LRU leaf with ref==0
+  var leaves = [];
+  (function collect(n){ if(n.children.length===0 && n.parent) leaves.push(n); n.children.forEach(collect); })(rad.root);
+  var cands = leaves.filter(function(n){ return n.ref===0; });
+  if(!cands.length){
+    document.getElementById("radLog").innerHTML += "<br>· nothing evictable — all leaves are live";
+    return;
+  }
+  cands.sort(function(a,b){ return a.used - b.used; });
+  var victim = cands[0];
+  var freed = victim.tokens.length;
+  var p = victim.parent;
+  p.children.splice(p.children.indexOf(victim),1);
+  radBuild(null);
+  document.getElementById("radLog").innerHTML += "<br>· evicted <span class='miss'>"+freed+
+    " tokens</span> (LRU, ref=0) — a repeat of that request must re-prefill them";
+});
+radReset();
+
+/* =====================================================
+   5. PAGED MEMORY
+   ===================================================== */
+/* ---- panel A: contiguous ---- */
+var PA_STEPS = [
+  {cap:"allocate A — needs 8 contiguous units",            alloc:"A", n:8},
+  {cap:"allocate B — needs 8 contiguous units",            alloc:"B", n:8},
+  {cap:"allocate C — needs 8 contiguous units",            alloc:"C", n:8},
+  {cap:"B finishes → its 8 units are freed… mid-pool",     free:"B"},
+  {cap:"request D arrives — needs <b class='bad'>12 contiguous</b> units", tryD:12},
+  {cap:"<b class='bad'>✗ OOM.</b> 16 units free (8 mid-pool + 8 tail) but no run of 12 — <b class='bad'>external fragmentation</b>", fail:true},
+  {cap:"this is why vLLM replaced contiguous KV allocation with blocks →", last:true}
+];
+var pa = {cells:new Array(32).fill(null), step:0};
+function paRender(msg){
+  var pool = document.getElementById("pgPoolA");
+  pool.innerHTML = "";
+  var free = 0;
+  pa.cells.forEach(function(owner){
+    var d = document.createElement("div");
+    d.className = "cell";
+    if(owner){ d.classList.add("c"+owner); d.textContent = owner; }
+    else { free++; if(msg === "tryD") d.classList.add("hole"); }
+    pool.appendChild(d);
+  });
+  document.getElementById("pgACap").innerHTML =
+    "pool: 32 units · " + free + " free" +
+    (pa.step >= PA_STEPS.length ? " · <b class='bad'>D still waiting</b>" : "");
+}
+function paNext(){
+  if(pa.step >= PA_STEPS.length) return;
+  var s = PA_STEPS[pa.step++];
+  if(s.alloc){
+    var need = s.n, run = -1, len = 0;
+    for(var i=0;i<=pa.cells.length;i++){
+      if(i<pa.cells.length && pa.cells[i]===null){ if(len===0) run=i; len++; }
+      else { if(len>=need){ for(var k=run;k<run+need;k++) pa.cells[k]=s.alloc; break; } len=0; }
+    }
+  }
+  if(s.free){ for(var j=0;j<pa.cells.length;j++) if(pa.cells[j]===s.free) pa.cells[j]=null; }
+  paRender(s.tryD ? "tryD" : null);
+  if(s.fail){
+    var pool = document.getElementById("pgPoolA");
+    Array.prototype.forEach.call(pool.children, function(c){ c.classList.add("fail"); });
+  }
+  var btn = document.getElementById("pgANext");
+  if(s.last){ btn.textContent = "▶ Next"; btn.disabled = true; }
+}
+function paReset(){
+  pa.cells = new Array(32).fill(null); pa.step = 0;
+  document.getElementById("pgANext").disabled = false;
+  paRender(null);
+}
+document.getElementById("pgANext").addEventListener("click", paNext);
+document.getElementById("pgAReset").addEventListener("click", paReset);
+paRender(null);
+
+/* ---- panel B: paged blocks + CoW ---- */
+var PB_NBLOCKS = 16, PB_BSIZE = 4;
+var pb;
+function pbReset(){
+  // blocks: 0..15; each block {owners:[], tokens: fill for display taken from seqs}
+  pb = {
+    blocks: {},                                  // id -> {owners:{"A":true,...}}
+    seqs: { A:{blocks:[0], tokens:2}, B:{blocks:[1], tokens:1}, C:{blocks:[2], tokens:3} },
+    nextFree: 3
+  };
+  pb.blocks[0] = {owners:{A:1}};
+  pb.blocks[1] = {owners:{B:1}};
+  pb.blocks[2] = {owners:{C:1}};
+  pbRender(null);
+}
+function pbAlloc(name){
+  if(pb.nextFree >= PB_NBLOCKS) return null;
+  var id = pb.nextFree++;
+  pb.blocks[id] = {owners:{}};
+  pb.blocks[id].owners[name] = 1;
+  return id;
+}
+function pbFreeCount(){
+  var used = Object.keys(pb.blocks).length;
+  return PB_NBLOCKS - used;
+}
+function pbGrow(name, n){
+  var seq = pb.seqs[name];
+  if(!seq) return;
+  for(var i=0;i<n;i++){
+    var last = seq.blocks[seq.blocks.length-1];
+    var inBlock = ((seq.tokens - 1) % PB_BSIZE) + 1;
+    if(inBlock === PB_BSIZE){
+      // need a new block
+      var nb = pbAlloc(name);
+      if(nb === null){ document.getElementById("pgBCap").innerHTML = "<b class='bad'>pool exhausted</b>"; return; }
+      seq.blocks.push(nb);
+      pbRender(nb, name);
+    } else {
+      var owners = pb.blocks[last].owners;
+      var ref = Object.keys(owners).reduce(function(a,k){ return a + owners[k]; }, 0);
+      if(ref > 1){
+        // copy-on-write: give `name` its own copy of this block
+        delete owners[name];
+        var cb = pbAlloc(name);
+        if(cb === null){ owners[name] = 1; document.getElementById("pgBCap").innerHTML = "<b class='bad'>pool exhausted</b>"; return; }
+        seq.blocks[seq.blocks.length-1] = cb;
+        pbRender(cb, name, "CoW: copied block "+last+" → "+cb+" (only the block that changes)");
+      }
+    }
+    seq.tokens++;
+  }
+  pbRender(null);
+}
+function pbFork(src, dst){
+  if(pb.seqs[dst]) return;
+  var s = pb.seqs[src];
+  pb.seqs[dst] = {blocks:s.blocks.slice(), tokens:s.tokens};
+  s.blocks.forEach(function(b){ pb.blocks[b].owners[dst] = 1; });
+  pbRender(null, null, "A′ shares all of A's blocks — nothing copied yet");
+}
+function pbRender(fresh, who, msg){
+  var pool = document.getElementById("pgPoolB");
+  pool.innerHTML = "";
+  for(var i=0;i<PB_NBLOCKS;i++){
+    var d = document.createElement("div");
+    d.className = "cell";
+    var b = pb.blocks[i];
+    if(b){
+      var names = Object.keys(b.owners);
+      var primary = names[0];
+      var cls = {A:"cA",B:"cB",C:"cC","A′":"cAp"}[primary] || "cA";
+      d.classList.add(cls);
+      var ref = names.reduce(function(a,k){ return a + b.owners[k]; }, 0);
+      if(ref > 1) d.classList.add("shared");
+      d.textContent = primary + (ref > 1 ? "×"+ref : "");
+      // fill = fraction full for the seq whose last block this is
+      var fill = 1;
+      names.forEach(function(nm){
+        var s = pb.seqs[nm];
+        if(s && s.blocks[s.blocks.length-1] === i) fill = ((s.tokens - 1) % PB_BSIZE + 1) / PB_BSIZE;
+      });
+      var f = document.createElement("div"); f.className="fill"; f.style.height = Math.round(fill*100)+"%";
+      d.appendChild(f);
+    }
+    if(fresh === i) d.classList.add("fresh");
+    pool.appendChild(d);
+  }
+  // block tables
+  var tb = document.getElementById("pgTables");
+  tb.innerHTML = "";
+  ["A","B","C","A′"].forEach(function(nm){
+    var s = pb.seqs[nm];
+    if(!s) return;
+    var row = document.createElement("div"); row.className = "bt-row";
+    var who = document.createElement("span");
+    who.className = "who " + ({A:"wA",B:"wB",C:"wC","A′":"wAp"}[nm]);
+    who.textContent = nm;
+    row.appendChild(who);
+    s.blocks.forEach(function(b, bi){
+      var ref = Object.keys(pb.blocks[b].owners).reduce(function(a,k){ return a + pb.blocks[b].owners[k]; }, 0);
+      var chip = document.createElement("span");
+      chip.className = "bchip" + (bi === s.blocks.length-1 ? " last" : "") + (ref>1 ? " x2" : "");
+      chip.textContent = String(b);
+      row.appendChild(chip);
+    });
+    var cnt = document.createElement("span");
+    cnt.textContent = s.tokens + " tok · last " + (((s.tokens-1)%PB_BSIZE)+1) + "/" + PB_BSIZE;
+    row.appendChild(cnt);
+    tb.appendChild(row);
+  });
+  document.getElementById("pgBCap").innerHTML =
+    (msg ? msg + "<br>" : "") + "free blocks: <b>" + pbFreeCount() + "</b>/" + PB_NBLOCKS;
+}
+document.getElementById("pbGrowA").addEventListener("click", function(){ pbGrow("A", 4); });
+document.getElementById("pbGrowA2").addEventListener("click", function(){ pbGrow("A′", 1); });
+document.getElementById("pbFork").addEventListener("click", function(){ pbFork("A","A′"); });
+document.getElementById("pbReset").addEventListener("click", pbReset);
+pbReset();
+
+})();
+</script>
+</body>
+</html>
