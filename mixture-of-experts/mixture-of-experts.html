@@ -1,0 +1,1420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mixture of Experts — Sparse Routing, Grouped GEMM &amp; Expert Caching</title>
+<style>
+  :root{
+    --bg:#0a0e14; --panel:#101722; --panel2:#0c1220; --border:#1e2a3c;
+    --text:#dbe4ee; --muted:#7d8ca0; --faint:#4b5a6e;
+    --oh:#ff9040; --oh-dim:rgba(255,144,64,.16);
+    --work:#3fb950; --work-dim:rgba(63,185,80,.15);
+    --accent:#58a6ff; --accent-dim:rgba(88,166,255,.14);
+    --attn:#a78bfa; --attn-dim:rgba(167,139,250,.14);
+    --kv:#f472b6; --kv-dim:rgba(244,114,182,.14);
+    --teal:#4dd0e1;
+    --mono:"Cascadia Code","JetBrains Mono",Consolas,ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:16px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+       -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 22px}
+  code,.mono{font-family:var(--mono)}
+  a{color:var(--accent)}
+
+  /* ---------- chrome ---------- */
+  nav.top{position:sticky;top:0;z-index:50;background:rgba(10,14,20,.92);
+          backdrop-filter:blur(8px);border-bottom:1px solid var(--border)}
+  nav.top .wrap{display:flex;gap:4px;overflow-x:auto;padding:10px 22px}
+  nav.top a{color:var(--muted);text-decoration:none;font-size:13px;padding:6px 12px;
+            border-radius:8px;white-space:nowrap}
+  nav.top a:hover{color:var(--text);background:var(--panel)}
+  header{padding:64px 0 40px;position:relative;overflow:hidden}
+  header::before{content:"";position:absolute;inset:0;background:
+      radial-gradient(600px 300px at 15% 0%,rgba(167,139,250,.09),transparent 60%),
+      radial-gradient(700px 340px at 85% 10%,rgba(88,166,255,.09),transparent 60%)}
+  header .wrap{position:relative}
+  .kicker{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.16em;text-transform:uppercase}
+  h1{font-size:clamp(28px,5vw,44px);line-height:1.15;margin:10px 0 12px;letter-spacing:-.01em}
+  h1 .hl{color:var(--accent)}
+  .sub{color:var(--muted);max-width:820px;font-size:17px}
+  .chips{display:flex;gap:12px;flex-wrap:wrap;margin-top:26px}
+  .chip{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:12px 18px;min-width:150px}
+  .chip b{display:block;font-family:var(--mono);font-size:22px;font-weight:600}
+  .chip span{color:var(--muted);font-size:12.5px}
+  .chip.c1 b{color:var(--oh)} .chip.c2 b{color:var(--work)} .chip.c3 b{color:var(--teal)}
+
+  section{padding:56px 0 8px}
+  h2{font-size:clamp(21px,3.4vw,28px);margin:8px 0 14px;letter-spacing:-.01em}
+  h2 .n{font-family:var(--mono);font-size:.72em;color:var(--faint);margin-right:14px;vertical-align:3px}
+  .lead{color:var(--muted);max-width:860px;font-size:15.5px}
+  .lead b{color:var(--text)} .lead code{color:var(--accent);font-size:.9em}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:14px;
+         padding:18px;margin-top:22px}
+  .note{color:var(--faint);font-size:12.5px;margin-top:12px;line-height:1.7}
+  .note b{color:var(--muted)} .note .bad{color:var(--oh)} .note .good{color:var(--work)}
+
+  /* ---------- sims ---------- */
+  .sim-head{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-bottom:12px}
+  .btn{background:var(--panel2);border:1px solid var(--border);color:var(--text);
+       border-radius:9px;padding:8px 16px;font:600 13.5px system-ui;cursor:pointer}
+  .btn:hover{border-color:var(--faint)}
+  .btn.primary{background:var(--accent-dim);border-color:var(--accent);color:var(--accent)}
+  .btn:disabled{opacity:.45;cursor:default}
+  .ctl-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .ctl-row label{color:var(--muted);font-size:12.5px}
+  select{background:var(--panel2);color:var(--text);border:1px solid var(--border);
+         border-radius:8px;padding:7px 10px;font:13px var(--mono)}
+  input[type=range]{accent-color:var(--accent);width:150px}
+  input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px}
+  .ctl-val{font-family:var(--mono);font-size:12.5px;color:var(--text);min-width:64px;display:inline-block}
+  canvas.sim{width:100%;display:block;border-radius:10px;background:var(--panel2);
+             border:1px solid var(--border)}
+  .sim-foot{display:flex;flex-wrap:wrap;gap:14px;justify-content:space-between;align-items:flex-start;margin-top:12px}
+  .meters{display:flex;gap:10px;flex-wrap:wrap}
+  .meter{background:var(--panel2);border:1px solid var(--border);border-radius:10px;
+         padding:8px 14px;min-width:104px}
+  .meter b{display:block;font-family:var(--mono);font-size:19px;font-weight:600}
+  .meter span{color:var(--faint);font-size:11px}
+  .meter.m-eff b{color:var(--work)} .meter.m-bad b{color:var(--oh)}
+  .meter.m-blue b{color:var(--accent)} .meter.m-teal b{color:var(--teal)}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:12px}
+  .legend i{display:inline-block;width:14px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+  .lg-cpu{background:var(--oh)} .lg-gpu{background:var(--work)}
+  .lg-hit{background:var(--work)} .lg-miss{background:var(--oh)}
+  .lg-stall{background:repeating-linear-gradient(45deg,#5a6a80,#5a6a80 3px,#2a3547 3px,#2a3547 6px)}
+  .lg-idle{background:#2a3547}
+  .lg-line{background:var(--accent);height:3px;width:14px;vertical-align:2px;border-radius:2px}
+  .segbtns{display:flex;gap:0;border:1px solid var(--border);border-radius:9px;overflow:hidden}
+  .segbtn{background:var(--panel2);border:0;color:var(--muted);padding:8px 16px;
+          font:600 13px system-ui;cursor:pointer}
+  .segbtn.on{background:var(--accent-dim);color:var(--accent)}
+
+  /* ---------- 1. dense vs moe ---------- */
+  .tokbtns{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+  .tokbtn{border:1px solid var(--border);background:var(--panel2);color:var(--muted);border-radius:9px;
+          padding:7px 14px;font:600 12.5px system-ui;cursor:pointer;transition:all .25s}
+  .tokbtn:hover{color:var(--text)}
+  .tokbtn.t1.on{border-color:#58a6ff;background:var(--accent-dim);color:#58a6ff}
+  .tokbtn.t2.on{border-color:#ff9040;background:var(--oh-dim);color:#ff9040}
+  .tokbtn.t3.on{border-color:#3fb950;background:var(--work-dim);color:#3fb950}
+  .tokbtn.t0.on{border-color:var(--teal);background:rgba(77,208,225,.12);color:var(--teal)}
+  svg.moe{width:100%;height:auto;display:block}
+  .fbox rect{fill:var(--panel2);stroke:var(--border);stroke-width:1.5}
+  .fbox text{fill:var(--text);font:600 13px system-ui}
+  .fbox .s2{fill:var(--muted);font:10.5px var(--mono)}
+  .fbox .s3{fill:var(--faint);font:10px var(--mono)}
+  .eg rect{fill:var(--panel2);stroke-width:1.6}
+  .eg text{fill:var(--text);font:600 12px system-ui}
+  .tpath{stroke-width:2.2;fill:none;opacity:.8;transition:opacity .3s}
+  .wl{font:600 10.5px var(--mono);opacity:.95;transition:opacity .3s}
+  .gline{stroke:#33415a;stroke-width:1.2;fill:none;opacity:.5}
+  .gline2{stroke:#4b5a6e;stroke-width:1.1;fill:none;stroke-dasharray:4 4;opacity:.5}
+  .cap{fill:var(--faint);font:10.5px var(--mono)}
+  .tk{stroke:#0a0e14;stroke-width:1.5;transition:opacity .3s}
+  .tlabel{fill:var(--muted);font:600 10px var(--mono);transition:opacity .3s}
+  svg.moe.spot-1 .tpath:not(.p1),svg.moe.spot-2 .tpath:not(.p2),svg.moe.spot-3 .tpath:not(.p3){opacity:.05}
+  svg.moe.spot-1 .wl:not(.p1),svg.moe.spot-2 .wl:not(.p2),svg.moe.spot-3 .wl:not(.p3){opacity:.05}
+  svg.moe.spot-1 .tk.k2,svg.moe.spot-1 .tk.k3,svg.moe.spot-1 .tlabel.k2,svg.moe.spot-1 .tlabel.k3{opacity:.22}
+  svg.moe.spot-2 .tk.k1,svg.moe.spot-2 .tk.k3,svg.moe.spot-2 .tlabel.k1,svg.moe.spot-2 .tlabel.k3{opacity:.22}
+  svg.moe.spot-3 .tk.k1,svg.moe.spot-3 .tk.k2,svg.moe.spot-3 .tlabel.k1,svg.moe.spot-3 .tlabel.k2{opacity:.22}
+  .knobs{margin-top:20px;border:1px solid var(--border);border-radius:12px;overflow:hidden;
+         font-size:12.5px}
+  .knobs .krow{display:grid;grid-template-columns:1.1fr 1fr 1.4fr;gap:0}
+  .knobs .krow>div{padding:9px 14px;border-top:1px solid var(--border);color:var(--muted)}
+  .knobs .krow:first-child>div{border-top:0;background:var(--panel2);color:var(--text);
+      font:600 11.5px var(--mono);letter-spacing:.05em;text-transform:uppercase}
+  .knobs code{color:var(--accent);font-size:11.5px}
+  .knobs .krow>div:first-child{color:var(--text)}
+  .sp-chip{background:var(--panel2);border:1px solid var(--border);border-radius:10px;
+           padding:8px 14px;font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .sp-chip b{color:var(--teal)}
+  .gr-speed{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+
+  /* ---------- 2. router ---------- */
+  .rt-grid{display:grid;grid-template-columns:1.5fr 1fr;gap:20px;align-items:start}
+  .rt-hint{color:var(--faint);font:11px var(--mono);text-align:center;margin-top:8px}
+  .rt-side h4{margin:0 0 4px;font-size:14px}
+  .rt-side h4 .mono{color:var(--faint);font-weight:400;font-size:11.5px}
+  .rt-bars{margin-top:10px}
+  .brow{display:grid;grid-template-columns:30px 1fr 118px;gap:8px;align-items:center;margin:5px 0}
+  .brow .bl{font:600 11px var(--mono);color:var(--muted)}
+  .brow .btrack{height:12px;background:var(--panel);border:1px solid var(--border);
+                border-radius:6px;overflow:hidden}
+  .brow .bfill{height:100%;width:0%;transition:width .3s;opacity:.3}
+  .brow.on .bfill{opacity:1}
+  .brow.on .bl{color:var(--text)}
+  .brow .bval{font:11px var(--mono);color:var(--faint);text-align:right;white-space:nowrap}
+  .brow .bval b{color:var(--text);font-weight:600}
+  .rt-out{margin-top:14px;background:var(--panel2);border:1px solid var(--border);border-radius:10px;
+          padding:12px 14px;font:13px var(--mono);color:var(--muted);line-height:1.8;min-height:58px}
+  .rt-out b{color:var(--text)}
+
+  /* ---------- 4. cache log ---------- */
+  .ec-log{margin-top:12px;background:var(--panel2);border:1px solid var(--border);border-radius:10px;
+          padding:10px 14px;font:11.5px var(--mono);color:var(--muted);
+          max-height:138px;overflow-y:auto;line-height:1.85}
+  .ec-log .hit{color:var(--work)} .ec-log .miss{color:var(--oh)}
+  .ec-log .pf{color:var(--teal)} .ec-log .ev{color:var(--kv)}
+  .ec-log div{white-space:nowrap}
+
+  /* ---------- 6. since the book ---------- */
+  .sota-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:22px}
+  .scard{background:var(--panel2);border:1px solid var(--border);border-radius:12px;
+         padding:16px 18px;position:relative}
+  .scard .when{display:inline-block;font-family:var(--mono);font-size:10.5px;color:var(--accent);
+         background:var(--accent-dim);border-radius:5px;padding:2px 8px;margin-bottom:8px}
+  .scard h4{margin:0 0 8px;font-size:15px}
+  .scard p{margin:0;color:var(--muted);font-size:13px;line-height:1.6}
+  .scard p b{color:var(--text)}
+  .scard .tie{display:block;margin-top:10px;font-family:var(--mono);font-size:11px;color:var(--faint)}
+  .scard .tie b{color:var(--teal);font-weight:600}
+  @media(max-width:940px){ .sota-grid{grid-template-columns:1fr} }
+
+  footer{padding:44px 0 60px;border-top:1px solid var(--border);margin-top:56px}
+  .formula{font-family:var(--mono);font-size:14.5px;color:var(--muted);text-align:center;padding:8px 0 4px;line-height:1.9}
+  .formula b{color:var(--work)} .formula .bad{color:var(--oh)} .formula .dim{color:var(--faint)}
+  .fin{color:var(--faint);text-align:center;font-size:13px;margin-top:10px}
+
+  .reveal{opacity:0;transform:translateY(16px);transition:opacity .6s ease,transform .6s ease}
+  .reveal.in{opacity:1;transform:none}
+
+  @media(max-width:940px){
+    .rt-grid{grid-template-columns:1fr}
+  }
+  @media(max-width:700px){
+    .knobs .krow{grid-template-columns:1fr}
+    .knobs .krow>div:first-child{background:var(--panel2);color:var(--text);
+      font:600 11.5px var(--mono);letter-spacing:.05em;text-transform:uppercase}
+  }
+  @media(prefers-reduced-motion:reduce){
+    *{transition:none!important;animation:none!important;scroll-behavior:auto}
+  }
+</style>
+</head>
+<body>
+
+<nav class="top"><div class="wrap">
+  <a href="#dense">① Dense vs MoE</a>
+  <a href="#router">② The router</a>
+  <a href="#grouped">③ Grouped GEMM</a>
+  <a href="#cache">④ Expert cache</a>
+  <a href="#balance">⑤ Load balance</a>
+  <a href="#sota">⑥ Since the book</a>
+</div></nav>
+
+<header><div class="wrap">
+  <div class="kicker">GPU Inference · Chapter 9</div>
+  <h1>Mixture of Experts: 30 billion parameters,<br><span class="hl">3 billion at work</span></h1>
+  <p class="sub">Chapter 9's swap: instead of one large FFN that every token passes through, a tiny
+     router sends each token to its <em>top-2 of 8</em> small experts. Prefill and decode still exist,
+     decode is still memory-bound — but the FFN becomes a sparse, batch-dependent gather. Four
+     interactive simulations below: route tokens, sort them into grouped GEMMs, cache experts in
+     VRAM, and balance the load — every number straight from the book.</p>
+  <div class="chips">
+    <div class="chip c1"><b>70B → 3B</b><span>active params per token · dense 70B vs Qwen3-30B-A3B</span></div>
+    <div class="chip c2"><b>140 → 60 GB</b><span>fp16 weights to hold in VRAM</span></div>
+    <div class="chip c3"><b>8 × top-2</b><span>experts per layer × picks per token</span></div>
+  </div>
+</div></header>
+
+<!-- ============ 1. DENSE VS MOE ============ -->
+<section id="dense"><div class="wrap reveal">
+  <div class="kicker">Section 1 · Interactive</div>
+  <h2><span class="n">01</span>Dense vs MoE: replace the FFN with a committee</h2>
+  <p class="lead">A standard transformer runs <b>every token through the same FFN</b> — for a 7B model,
+     <code>w1: 4096×11008</code> and <code>w2: 11008×4096</code>. Mixture of Experts replaces that single
+     FFN with <b>many smaller expert FFNs plus a router</b> that decides, per token, which experts to use.
+     The book's routing example, live: token 1 → experts 2 &amp; 5, token 2 → 1 &amp; 5, token 3 → 2 &amp; 7.
+     <b>Click a token</b> to trace it through both halves.</p>
+
+  <div class="panel">
+    <div class="tokbtns">
+      <button class="tokbtn t0 on" data-t="0">all tokens</button>
+      <button class="tokbtn t1" data-t="1">token 1</button>
+      <button class="tokbtn t2" data-t="2">token 2</button>
+      <button class="tokbtn t3" data-t="3">token 3</button>
+    </div>
+    <svg class="moe" id="moeSvg" viewBox="0 0 860 332" role="group" aria-label="Dense FFN versus Mixture of Experts layer, with three tokens routed to their top-2 experts">
+      <defs><marker id="marr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#4b5a6e"></path></marker></defs>
+      <line x1="392" y1="16" x2="392" y2="306" stroke="#1e2a3c" stroke-dasharray="6 6"></line>
+
+      <!-- ======== left: dense ======== -->
+      <text x="195" y="30" text-anchor="middle" class="cap">dense · one FFN</text>
+      <circle class="tk k1" cx="36" cy="86"  r="10" fill="#58a6ff"></circle>
+      <circle class="tk k2" cx="36" cy="160" r="10" fill="#ff9040"></circle>
+      <circle class="tk k3" cx="36" cy="234" r="10" fill="#3fb950"></circle>
+      <text class="tlabel k1" x="36" y="66" text-anchor="middle">t1</text>
+      <text class="tlabel k2" x="36" y="140" text-anchor="middle">t2</text>
+      <text class="tlabel k3" x="36" y="214" text-anchor="middle">t3</text>
+      <path class="tpath p1" d="M48,86  H118" stroke="#58a6ff"></path>
+      <path class="tpath p2" d="M48,160 H118" stroke="#ff9040"></path>
+      <path class="tpath p3" d="M48,234 H118" stroke="#3fb950"></path>
+      <g class="fbox">
+        <rect x="120" y="76" width="150" height="168" rx="12"></rect>
+        <text x="195" y="148" text-anchor="middle">FFN</text>
+        <text x="195" y="176" text-anchor="middle" class="s2">w1 4096×11008</text>
+        <text x="195" y="192" text-anchor="middle" class="s2">w2 11008×4096</text>
+        <text x="195" y="216" text-anchor="middle" class="s3">every token · same weights</text>
+      </g>
+      <path class="gline" d="M270,160 H316" marker-end="url(#marr)"></path>
+      <circle cx="330" cy="160" r="11" fill="none" stroke="#4b5a6e" stroke-width="1.4"></circle>
+      <text x="330" y="164" text-anchor="middle" class="cap">y</text>
+      <text x="195" y="318" text-anchor="middle" class="cap">70B active · every token pays for all of it</text>
+
+      <!-- ======== right: MoE ======== -->
+      <text x="700" y="54" text-anchor="middle" class="cap">MoE · 8 experts, top-2 per token</text>
+      <circle class="tk k1" cx="410" cy="100" r="10" fill="#58a6ff"></circle>
+      <circle class="tk k2" cx="410" cy="180" r="10" fill="#ff9040"></circle>
+      <circle class="tk k3" cx="410" cy="258" r="10" fill="#3fb950"></circle>
+      <text class="tlabel k1" x="410" y="80"  text-anchor="middle">t1</text>
+      <text class="tlabel k2" x="410" y="160" text-anchor="middle">t2</text>
+      <text class="tlabel k3" x="410" y="238" text-anchor="middle">t3</text>
+      <g class="fbox">
+        <rect x="462" y="88" width="118" height="30" rx="8"></rect>
+        <text x="521" y="107" text-anchor="middle" style="font:600 11.5px system-ui">router 4096→8</text>
+      </g>
+      <path class="gline2" d="M424,100 C446,100 448,103 460,103"></path>
+      <path class="gline2" d="M424,180 C448,180 448,105 460,104"></path>
+      <path class="gline2" d="M424,258 C448,258 448,106 460,105"></path>
+      <!-- router score lines -->
+      <path class="gline2" d="M580,100 C604,96 612,96 640,142"></path>
+      <path class="gline2" d="M580,100 C616,96 680,110 708,142"></path>
+      <path class="gline2" d="M580,100 C640,96 760,120 784,142"></path>
+      <path class="gline2" d="M580,100 C660,96 820,130 858,142"></path>
+      <path class="gline2" d="M580,108 C620,120 620,170 640,196"></path>
+      <path class="gline2" d="M580,108 C650,130 730,180 712,196"></path>
+      <path class="gline2" d="M580,108 C680,150 760,190 788,196"></path>
+      <path class="gline2" d="M580,108 C700,160 830,190 864,196"></path>
+      <!-- token -> expert paths (book example), routed through the corridors between boxes -->
+      <path class="tpath p1" d="M424,108 C530,158 640,90 754,141"  stroke="#58a6ff"></path>
+      <path class="tpath p1" d="M424,112 C500,200 580,272 676,246" stroke="#58a6ff"></path>
+      <path class="tpath p2" d="M424,184 C540,193 600,192 648,182" stroke="#ff9040"></path>
+      <path class="tpath p2" d="M424,188 C500,240 600,272 684,244" stroke="#ff9040"></path>
+      <path class="tpath p3" d="M424,262 C580,262 720,264 726,194" stroke="#3fb950"></path>
+      <path class="tpath p3" d="M424,262 C600,270 820,272 830,244" stroke="#3fb950"></path>
+      <!-- experts (used ones carry their mixing weight inside) -->
+      <g class="eg"><rect x="576" y="144" width="64" height="44" rx="9" style="stroke:#58a6ff"></rect>
+        <text x="608" y="168" text-anchor="middle">E0</text></g>
+      <g class="eg"><rect x="652" y="144" width="64" height="44" rx="9" style="stroke:#ff9040"></rect>
+        <text x="684" y="168" text-anchor="middle">E1</text>
+        <text class="wl p2" x="684" y="182" text-anchor="middle">w 0.7</text></g>
+      <g class="eg"><rect x="728" y="144" width="64" height="44" rx="9" style="stroke:#3fb950"></rect>
+        <text x="760" y="168" text-anchor="middle">E2</text>
+        <text class="wl p1 p3" x="760" y="182" text-anchor="middle">w 0.7</text></g>
+      <g class="eg"><rect x="804" y="144" width="52" height="44" rx="9" style="stroke:#a78bfa"></rect>
+        <text x="830" y="168" text-anchor="middle">E3</text></g>
+      <g class="eg"><rect x="576" y="198" width="64" height="44" rx="9" style="stroke:#f472b6"></rect>
+        <text x="608" y="222" text-anchor="middle">E4</text></g>
+      <g class="eg"><rect x="652" y="198" width="64" height="44" rx="9" style="stroke:#4dd0e1"></rect>
+        <text x="684" y="222" text-anchor="middle">E5</text>
+        <text class="wl p1 p2" x="684" y="236" text-anchor="middle">w 0.3</text></g>
+      <g class="eg"><rect x="728" y="198" width="64" height="44" rx="9" style="stroke:#e3b341"></rect>
+        <text x="760" y="222" text-anchor="middle">E6</text></g>
+      <g class="eg"><rect x="804" y="198" width="52" height="44" rx="9" style="stroke:#f97583"></rect>
+        <text x="830" y="222" text-anchor="middle">E7</text>
+        <text class="wl p3" x="830" y="236" text-anchor="middle">w 0.3</text></g>
+      <!-- combine -->
+      <path class="gline" d="M684,242 C684,268 700,274 714,280" fill="none" marker-end="url(#marr)"></path>
+      <path class="gline" d="M608,242 C608,272 690,280 712,282" fill="none" marker-end="url(#marr)"></path>
+      <path class="gline" d="M760,242 C760,264 736,274 726,280" fill="none" marker-end="url(#marr)"></path>
+      <path class="gline" d="M830,242 C830,270 760,282 738,284" fill="none" marker-end="url(#marr)"></path>
+      <circle cx="728" cy="290" r="13" fill="none" stroke="#4dd0e1" stroke-width="1.6"></circle>
+      <text x="728" y="295" text-anchor="middle" style="fill:#4dd0e1;font:600 13px system-ui">Σ</text>
+      <text x="748" y="295" class="cap">= 0.7·Eₐ + 0.3·E_b</text>
+      <text x="620" y="330" text-anchor="middle" class="cap">~3B active · each token pays for 2 of 8</text>
+    </svg>
+
+    <div class="knobs">
+      <div class="krow"><div>metric</div><div>dense 70B</div><div>Qwen3-30B-A3B (MoE)</div></div>
+      <div class="krow"><div>parameters</div><div><code>70B</code></div>
+        <div><code>30B</code> total — 8 experts per layer</div></div>
+      <div class="krow"><div>active per token</div><div><code>70B</code> — everything</div>
+        <div><code>~3B</code> — 2 experts · the "A3B" in the name</div></div>
+      <div class="krow"><div>weights · fp16</div><div><code>140 GB</code></div>
+        <div><code>60 GB</code> — most of an 80 GB H100</div></div>
+      <div class="krow"><div>capacity vs compute</div><div>capacity = compute</div>
+        <div>10× capacity per active FLOP — quality per FLOP is the point</div></div>
+    </div>
+    <p class="note">Trade: MoE buys <b>more total capacity with less active compute per token</b> — the cost
+       is complexity in routing and expert load balancing (§5). Key parameters from the book:
+       <b>num_experts</b> typically 8–64, <b>top_k</b> typically 1–2, per-expert <b>d_ff</b> smaller than the
+       dense FFN. Qwen3-30B-A3B: 8 experts, <code>top_k=2</code>. Mixtral, Qwen-MoE and DeepSeek get their
+       better quality per FLOP from exactly this sparsity — the same inference principles apply, only the
+       memory-access pattern of the FFN changes.</p>
+  </div>
+</div></section>
+
+<!-- ============ 2. THE ROUTER ============ -->
+<section id="router"><div class="wrap reveal">
+  <div class="kicker">Section 2 · Interactive</div>
+  <h2><span class="n">02</span>The router: 32K parameters that decide everything</h2>
+  <p class="lead">The router is the smallest layer in the model — a single linear projection
+     <code>4096 → 8</code> producing one logit per expert. Then: <b>top-k</b> picks the winners, a
+     <b>softmax over just those k logits</b> turns them into mixing coefficients, and the token's FFN
+     output is the weighted sum. Drop tokens into the space — by hand or as a stream — and watch
+     <b>regions of expert specialization</b> emerge: exactly the skew that expert caching (§4) feeds on.</p>
+
+  <div class="panel">
+    <div class="sim-head">
+      <div class="ctl-row">
+        <button class="btn primary" id="rtPlay">▶ Stream</button>
+        <button class="btn" id="rtStep">⏭ One token</button>
+        <button class="btn" id="rtClear">↺ Clear</button>
+      </div>
+      <div class="ctl-row">
+        <label for="rtK">top-k</label>
+        <select id="rtK">
+          <option value="1">1 expert</option>
+          <option value="2" selected>2 experts (Qwen3)</option>
+          <option value="4">4 experts</option>
+        </select>
+      </div>
+    </div>
+    <div class="rt-grid">
+      <div>
+        <canvas class="sim" id="rtCanvas" style="height:300px" role="img"
+          aria-label="Two-dimensional token space where each region selects a different top expert; tokens appear as dots colored by their chosen expert"></canvas>
+        <div class="rt-hint">click anywhere to route a token · colors = expert regions</div>
+      </div>
+      <div class="rt-side">
+        <h4>router logits <span class="mono">= x @ W_r · Linear(4096→8) · 32K params</span></h4>
+        <div class="rt-bars" id="rtBars"></div>
+        <div class="rt-out" id="rtOut">route a token to see its logits, top-k picks and mixing weights</div>
+      </div>
+    </div>
+    <p class="note">Book mechanics, exactly: <code>weights, indices = torch.topk(router_logits, top_k)</code>
+       then <code>weights = F.softmax(weights, dim=-1)</code> — the softmax runs over the <b>k selected
+       logits only</b>, so the coefficients always sum to 1. If expert 3 scored 0.7 and expert 5 scored
+       0.3, the layer outputs <code>0.7·expert_3(x) + 0.3·expert_5(x)</code>. A well-trained router
+       <b>specializes</b> its experts, creating predictable — and skewed — access patterns: that is why
+       some experts are hot and others rarely used (§4), and why an unbalanced router wastes the fleet
+       (§5). Every expert still contributes only a small FFN: capacity lives in the <em>count</em> of
+       experts, not their size.</p>
+  </div>
+</div></section>
+
+<!-- ============ 3. GROUPED GEMM ============ -->
+<section id="grouped"><div class="wrap reveal">
+  <div class="kicker">Section 3 · Interactive</div>
+  <h2><span class="n">03</span>Sort, then group: the scattered-batch fix</h2>
+  <p class="lead">In a dense model every token does the same computation — perfect for big batched GEMMs.
+     In MoE, <b>tokens scatter</b>: token 1 needs experts 2 &amp; 5, token 2 needs 1 &amp; 5… The naive
+     loop-over-experts runs one <b>tiny GEMM per expert over scattered tokens</b> — small batches, many
+     launches, poor utilization. The fix that makes MoE nearly as efficient as dense at large batch:
+     <b>flatten the token–expert pairs, sort by expert</b>, find each expert's contiguous range
+     (<code>searchsorted</code>), and hand it <b>one batched GEMM chunk</b>. Press play and watch the
+     permutation.</p>
+
+  <div class="panel">
+    <div class="sim-head">
+      <div class="ctl-row">
+        <button class="btn primary" id="gdPlay">▶ Play</button>
+        <button class="btn" id="gdStep">⏭ Step</button>
+        <button class="btn" id="gdEnd">⏩ End</button>
+        <button class="btn" id="gdReset">↺ Reset</button>
+      </div>
+      <div class="ctl-row">
+        <label for="gdBatch">batch size</label>
+        <select id="gdBatch">
+          <option value="1">1 token</option>
+          <option value="64" selected>64 tokens</option>
+          <option value="256">256 tokens</option>
+        </select>
+        <label for="gdSpeed" style="margin-left:8px">speed</label>
+        <select id="gdSpeed">
+          <option value="0.5">0.5×</option>
+          <option value="1">1×</option>
+          <option value="2" selected>2×</option>
+          <option value="4">4×</option>
+        </select>
+      </div>
+    </div>
+    <canvas class="sim" id="gdCanvas" style="height:330px" role="img"
+      aria-label="Token-expert assignments morphing from token order into expert-sorted contiguous chunks, one grouped GEMM per expert"></canvas>
+    <div class="sim-foot">
+      <div class="meters">
+        <div class="meter m-blue"><b id="gdAvg">16</b><span>tokens / expert avg</span></div>
+        <div class="meter m-bad"><b id="gdNaive">8</b><span>naive: scattered GEMMs</span></div>
+        <div class="meter m-eff"><b id="gdGrouped">1</b><span>grouped: permute + GEMM</span></div>
+        <div class="meter" id="gdVerdictMeter"><b id="gdVerdict">decent</b><span>GEMM efficiency</span></div>
+      </div>
+      <div class="legend" id="gdLegend"></div>
+    </div>
+    <p class="note">Efficiency is a <b>function of batch size</b> — the book's three lines, verbatim:
+       batch 1 → <b class="bad">0.25 tokens/expert avg — very small GEMMs, poor efficiency</b>;
+       batch 64 → <b>16 tokens/expert — decent GEMM sizes, reasonable efficiency</b>;
+       batch 256 → <b class="good">64 tokens/expert — good GEMM sizes, high efficiency</b> — for large
+       batches, grouping makes MoE nearly as efficient as dense. The sort itself is cheap
+       (<code>indices.flatten().sort()</code> over <code>batch × top_k</code> small ints) and the
+       permutation is one gather. A grouped-GEMM kernel (or expert-parallel kernel) then walks the
+       contiguous ranges back-to-back — the same m-size as the naive version's biggest case, but with
+       <b>zero gather/scatter per expert</b> and no launch-per-expert on the critical path.
+       Display shows the first 48 tokens of the batch; meters use the full batch.</p>
+  </div>
+</div></section>
+
+<!-- ============ 4. EXPERT CACHE ============ -->
+<section id="cache"><div class="wrap reveal">
+  <div class="kicker">Section 4 · Interactive</div>
+  <h2><span class="n">04</span>The expert cache: 60 GB of weights, 4 slots of VRAM</h2>
+  <p class="lead">Qwen3-30B-A3B's 30B parameters are <b>60 GB at fp16 — most of a single 80 GB H100</b>
+     before any KV cache; the B200's 192 GB is headroom. When experts don't all fit, treat GPU memory as
+     a <b>cache</b>: keep the most recently used experts resident and stream the rest in from CPU memory
+     or disk. Skewed routing (§2) is what makes this viable — flip the router distribution and watch the
+     cache thrash. Prefetching on a second CUDA stream hides what latency it can.</p>
+
+  <div class="panel">
+    <div class="sim-head">
+      <div class="ctl-row">
+        <button class="btn primary" id="ecPlay">▶ Play</button>
+        <button class="btn" id="ecStep">⏭ Step</button>
+        <button class="btn" id="ecReset">↺ Reset</button>
+        <div class="segbtns" style="margin-left:8px">
+          <button class="segbtn on" id="ecSkew">skewed router</button>
+          <button class="segbtn" id="ecUnif">uniform router</button>
+        </div>
+      </div>
+      <div class="ctl-row">
+        <label for="ecSlots">cache slots</label>
+        <select id="ecSlots">
+          <option value="2">2 of 8</option>
+          <option value="4" selected>4 of 8 (book)</option>
+          <option value="6">6 of 8</option>
+        </select>
+        <label style="margin-left:10px"><input type="checkbox" id="ecPf"> prefetch (2nd stream)</label>
+      </div>
+    </div>
+    <canvas class="sim" id="ecCanvas" style="height:270px" role="img"
+      aria-label="LRU expert cache simulation: experts load from CPU memory into GPU cache slots, evicting the least recently used"></canvas>
+    <div class="sim-foot">
+      <div class="meters">
+        <div class="meter m-eff"><b id="ecHit">–</b><span>cache hit rate</span></div>
+        <div class="meter m-bad"><b id="ecMiss">0</b><span>misses → transfers</span></div>
+        <div class="meter"><b id="ecStepMs">10 ms</b><span>avg step latency</span></div>
+        <div class="meter m-teal"><b id="ecSaved">0 ms</b><span>stall hidden by prefetch</span></div>
+      </div>
+      <div class="legend">
+        <span><i class="lg-hit"></i>hit — resident</span>
+        <span><i class="lg-miss"></i>miss — load over PCIe</span>
+        <span><i class="lg-cpu"></i>CPU / disk copy</span>
+        <span><i class="lg-gpu"></i>GPU · cached expert</span>
+      </div>
+    </div>
+    <div class="ec-log" id="ecLog"><div>cache empty — press play or step</div></div>
+    <p class="note">The book's LRU, faithfully: on a hit, the expert moves to most-recently-used; on a
+       miss with a full cache, <b>evict the LRU expert</b> and load the new one from CPU memory or disk.
+       Model: step compute ≈ <b>10 ms</b>; an expert load ≈ <b>30 ms</b> over PCIe, so an unprefetched miss
+       costs a 40 ms step; a <b>predicted</b> miss loads on a second CUDA stream while the current batch
+       computes — the load overlaps the 10 ms and only 30 ms of it remains exposed (30 ms of every miss
+       still beats nothing: transfers outlast one layer's compute, so prefetch <em>reduces</em>, not
+       removes, stall). The predictor reads the <em>next</em> layer's router logits — the book's
+       <code>PrefetchingExpertCache</code>. Why skew saves you: with 8 experts and cache size 4, a
+       well-trained router's popularity ranking keeps the same ~4 experts hot — the top-4 experts here
+       carry ~94% of assignments, so the hit rate settles near <b>90%</b> — while a uniform router
+       misses every expert it hasn't already cached (~50%, thrashing).</p>
+  </div>
+</div></section>
+
+<!-- ============ 5. LOAD BALANCE ============ -->
+<section id="balance"><div class="wrap reveal">
+  <div class="kicker">Section 5 · Interactive</div>
+  <h2><span class="n">05</span>Load balance: six idle experts are a 2× bill</h2>
+  <p class="lead">Nothing forces a trained router to spread tokens evenly. Slide the skew toward
+     "everyone picks the same two" and watch <b>six experts sit idle</b> while two do everything — the
+     book's verdict: <em>total compute is 2× what it should be, because we cannot parallelize across
+     experts</em>. The production damper is an <b>expert capacity</b>: each expert takes at most C tokens;
+       overflow tokens are <b>rerouted to less busy experts</b> — trading routing quality for efficiency.
+       Training adds auxiliary losses to encourage balance; at inference we live with whatever routing
+       the trained model produces.</p>
+
+  <div class="panel">
+    <div class="sim-head">
+      <div class="ctl-row">
+        <button class="btn primary" id="blPlay">▶ Play</button>
+        <button class="btn" id="blStep">⏭ Step</button>
+        <button class="btn" id="blEnd">⏩ End</button>
+        <button class="btn" id="blReset">↺ Reset</button>
+      </div>
+      <div class="ctl-row">
+        <label for="blSkew">router skew</label>
+        <input type="range" id="blSkew" min="0" max="1" step="0.05" value="0.35">
+        <span class="ctl-val" id="blSkewV">35%</span>
+        <label for="blCap" style="margin-left:8px">capacity / expert</label>
+        <input type="range" id="blCap" min="4" max="16" step="1" value="8">
+        <span class="ctl-val" id="blCapV">8</span>
+      </div>
+    </div>
+    <canvas class="sim" id="blCanvas" style="height:330px" role="img"
+      aria-label="Tokens assigned to eight experts with load bars, capacity limit and overflow rerouting"></canvas>
+    <div class="sim-foot">
+      <div class="meters">
+        <div class="meter m-bad"><b id="blMax">0</b><span>peak expert load</span></div>
+        <div class="meter m-bad"><b id="blIdle">0</b><span>idle experts</span></div>
+        <div class="meter m-blue"><b id="blRer">0</b><span>rerouted (quality cost)</span></div>
+        <div class="meter m-teal"><b id="blShare">8</b><span>balanced share (32×2 ÷ 8)</span></div>
+      </div>
+      <div class="legend" id="blLegend"></div>
+    </div>
+    <p class="note">The book's <code>load_balanced_routing</code>: count each expert's assignments; when a
+       pick would exceed <code>expert_capacity</code>, reroute to the <b>first expert under capacity</b>
+       (the sim uses least-loaded — same idea, smoother). Full skew is the book's disaster case:
+       <b class="bad">expert 0: 100% load · expert 1: 100% load · experts 2–7: 0%</b> — total compute
+       <b class="bad">2× what it should be</b>. Capacity is the knob that trades quality (suboptimal
+       routing) for efficiency (balanced load): set it to the balanced share (8) and watch the hot pair's
+       overflow spread across the idle six — every rerouted tick is a token that got a slightly wrong
+       expert so the GPU stayed full. 32 tokens × top-2 = 64 assignments over 8 experts.</p>
+  </div>
+</div></section>
+
+<!-- ============ 6. SINCE THE BOOK ============ -->
+<section id="sota"><div class="wrap reveal">
+  <div class="kicker">Section 6 · October 2026</div>
+  <h2><span class="n">06</span>Since the book: MoE ate the frontier</h2>
+  <p class="lead">The book teaches MoE through an 8-expert model — that design choice won. Six things
+     that shipped after the book's examples, each tied back to the section it grew out of.</p>
+
+  <div class="panel">
+    <div class="sota-grid">
+      <div class="scard">
+        <span class="when">Dec 2024 → 2025</span>
+        <h4>Fine-grained + shared experts: DeepSeek-V3 / R1</h4>
+        <p><b>671B total, 37B active</b>: <b>256 routed experts</b> per layer plus <b>1 shared expert</b>
+           every token always uses, top-8 routing. Fine-grained (many small) experts give more
+           combinations per FLOP; the shared expert carries the load common to all tokens. And the §5
+           problem got a training-time answer: <b>auxiliary-loss-free balancing</b> via per-expert bias
+           terms — balance without the usual auxiliary-loss quality tax.</p>
+        <span class="tie">← grows <b>§5</b>: load balancing moved from inference patch to architecture</span>
+      </div>
+      <div class="scard">
+        <span class="when">Aug 2025</span>
+        <h4>OpenAI rejoined open weights — with MoE</h4>
+        <p><b>gpt-oss-120b</b>: 117B total, <b>5.1B active</b>, 128 routed experts + 1 shared, top-4 —
+           and the §1 memory row solved by quantization: MoE weights in <b>MXFP4</b> so the whole model
+           fits <b>a single 80 GB GPU</b> (H100 / MI300X). Its sibling gpt-oss-20b: 21B total, 3.6B
+           active, 32 experts — runs in <b>16 GB</b>, i.e. on a laptop. Apache 2.0.</p>
+        <span class="tie">← grows <b>§1 + §4</b>: 60 GB of fp16 was only ever a rendering of this row</span>
+      </div>
+      <div class="scard">
+        <span class="when">Jul 2025</span>
+        <h4>Giant scale: Kimi K2</h4>
+        <p>Moonshot's <b>Kimi K2</b>: <b>1T total parameters, 32B active</b> — the book's
+           "A3B" naming stretched to A32B — with <b>384 experts + 1 shared, top-8</b>, 128K context,
+           open weights (modified MIT). The pattern held all the way up: capacity grows with expert
+           <em>count</em>, active compute stays flat, and serving it is an expert-parallelism problem
+           more than a FLOP problem.</p>
+        <span class="tie">← grows <b>§1</b>: capacity without compute, at 33× the book's example</span>
+      </div>
+      <div class="scard">
+        <span class="when">Feb 2025 → 2026</span>
+        <h4>Expert parallelism got its own library: DeepEP</h4>
+        <p>DeepSeek open-sourced <b>DeepEP</b>: the all-to-all <b>dispatch / combine</b> kernels MoE
+           serving needs when experts are sharded across GPUs — NVLink inside the node, RDMA across
+           nodes, plus a low-latency mode for decode with hooks that overlap communication and
+           computation. vLLM and SGLang expose expert parallelism (<code>--ep-size</code>) on top of this
+           layer; routing became a <em>network</em> operation.</p>
+        <span class="tie">← grows <b>§3</b>: the sort-and-group trick, extended across GPUs</span>
+      </div>
+      <div class="scard">
+        <span class="when">2025 → 2026</span>
+        <h4>Grouped GEMM grew up</h4>
+        <p>The §3 sort→contiguous-chunks idea is now every engine's default path, in silicon-shaped
+           form: DeepSeek's <b>DeepGEMM</b> (JIT-compiled grouped GEMMs for MoE, contiguous and masked
+           layouts), <b>CUTLASS fused MoE</b> GEMMs in vLLM, grouped GEMM in <b>FlashInfer</b>
+           (Chapter 6's library), and Triton <code>fused_moe</code>. One kernel launch per layer instead
+           of a launch per expert — the book's "solution is grouped GEMM" line, productized.</p>
+        <span class="tie">← grows <b>§3</b>: contiguous chunks became first-class kernel shapes</span>
+      </div>
+      <div class="scard">
+        <span class="when">Apr 2025 → 2026</span>
+        <h4>The book's example model got a family</h4>
+        <p>Qwen3-30B-A3B gained the <b>Qwen3-235B-A22B</b> flagship — 235B total, 22B active, 128
+           experts, top-8 — plus MoE and dense siblings at every scale, and update releases since.
+           The frontier-open default is now MoE: Mixtral (the book's other mention) was simply early.
+           Serving stacks treat "how many experts fit, where, and how do we all-to-all them" as a
+           first-class scheduling question — Chapter 10 territory.</p>
+        <span class="tie">← grows <b>§1 + §2</b>: the 8×top-2 classroom example, scaled out</span>
+      </div>
+    </div>
+    <p class="note">Sources: DeepSeek-V3 technical report (arXiv:2412.19437) &amp; DeepSeek-R1
+       (arXiv:2501.12948); gpt-oss model card &amp; repo (github.com/openai/gpt-oss, arXiv:2508.10925 —
+       specs checked Oct 2026); Kimi K2 model card (huggingface.co/moonshotai/Kimi-K2-Instruct — checked
+       Oct 2026); DeepEP &amp; DeepGEMM (github.com/deepseek-ai); Qwen3 announcement &amp; model cards
+       (Apr 2025). Engine flags follow the Chapter 7–8 pages' surveys.</p>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <div class="formula">
+    dense 70B: <span class="bad">70B active · 140 GB</span> <span class="dim">→</span> MoE 30B-A3B: <b>~3B active · 60 GB</b>
+    &nbsp;&nbsp;<span class="dim">·</span>&nbsp;&nbsp; router <span class="dim">=</span> Linear(4096→8) → top-2 → softmax → <b>0.7·Eₐ + 0.3·E_b</b><br>
+    scattered tokens <span class="dim">→</span> sort by expert <span class="dim">→</span> <b>one contiguous GEMM each</b>
+    &nbsp;&nbsp;<span class="dim">·</span>&nbsp;&nbsp; 6 idle experts <span class="dim">=</span> <span class="bad">2× compute</span> <span class="dim">— capacity caps the damage</span>
+  </div>
+  <p class="fin">Chapter 9 · Mixture of Experts — companion to <code>book/09-mixture-of-experts.md</code>.
+     §6 survey updated October 2026. Next: Chapter 10 — Production Server.</p>
+</div></footer>
+
+<script>
+(function(){
+"use strict";
+
+/* ================= reveal on scroll ================= */
+var io = ("IntersectionObserver" in window)
+  ? new IntersectionObserver(function(es){
+      es.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add("in"); io.unobserve(e.target);} });
+    }, {threshold:.12})
+  : null;
+document.querySelectorAll(".reveal").forEach(function(elm){ io ? io.observe(elm) : elm.classList.add("in"); });
+
+/* ================= helpers ================= */
+function el(id){ return document.getElementById(id); }
+function sizeCanvas(cv, h){
+  var dpr = window.devicePixelRatio || 1;
+  var w = cv.clientWidth || 900;
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  var ctx = cv.getContext("2d"); ctx.setTransform(dpr,0,0,dpr,0,0);
+  return ctx;
+}
+function rrect(ctx,x,y,w,h,r){
+  r = Math.max(0, Math.min(r, h/2, w/2));
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r);
+  ctx.closePath();
+}
+function clamp(v,a,b){ return v<a?a:(v>b?b:v); }
+function lerp(a,b,t){ return a+(b-a)*t; }
+function ease(t){ return t*t*(3-2*t); }
+
+var EXPC = ["#58a6ff","#ff9040","#3fb950","#a78bfa","#f472b6","#4dd0e1","#e3b341","#f97583"];
+var EXN = 8;
+
+/* =====================================================
+   1. DENSE VS MOE — token spotlight
+   ===================================================== */
+document.querySelectorAll(".tokbtn").forEach(function(btn){
+  btn.addEventListener("click", function(){
+    var t = btn.getAttribute("data-t");
+    var svg = el("moeSvg");
+    svg.classList.remove("spot-1","spot-2","spot-3");
+    document.querySelectorAll(".tokbtn").forEach(function(b){ b.classList.remove("on"); });
+    if(t !== "0"){
+      svg.classList.add("spot-" + t);
+      btn.classList.add("on");
+    } else {
+      document.querySelectorAll(".tokbtn.t0").forEach(function(b){ b.classList.add("on"); });
+    }
+  });
+});
+
+/* =====================================================
+   2. ROUTER
+   ===================================================== */
+/* expert "centers" in normalized [0,1]^2 — deterministic specialization */
+var RT_C = [[.14,.28],[.42,.78],[.74,.22],[.88,.82],[.30,.14],[.62,.52],[.10,.86],[.92,.42]];
+function rtLogit(e, x, y){
+  var dx = x - RT_C[e][0], dy = y - RT_C[e][1];
+  var d2 = dx*dx + dy*dy;
+  var bump = 3.0 * Math.exp(-d2 / (2*0.17*0.17));
+  var wig  = 0.75 * Math.sin((x*7.3 + e*2.99)*1.7) * Math.cos((y*6.1 + e*1.87)*1.3);
+  return bump + wig;
+}
+function rtTopk(logits, k){
+  var idx = [0,1,2,3,4,5,6,7].sort(function(a,b){ return logits[b]-logits[a]; });
+  var sel = idx.slice(0, k);
+  var mx = -1e9;
+  sel.forEach(function(i){ mx = Math.max(mx, logits[i]); });
+  var sum = 0, ws = {};
+  sel.forEach(function(i){ ws[i] = Math.exp(logits[i]-mx); sum += ws[i]; });
+  sel.forEach(function(i){ ws[i] = ws[i]/sum; });
+  return {sel:sel, ws:ws};
+}
+var rt = {cv:el("rtCanvas"), ctx:null, W:0, H:300, dots:[], last:null, playing:false, raf:0, lastT:0, acc:0};
+var rtBarEls = [];
+(function rtInitBars(){
+  var host = el("rtBars");
+  for(var i = 0; i < EXN; i++){
+    var row = document.createElement("div");
+    row.className = "brow";
+    var l = document.createElement("span"); l.className = "bl"; l.textContent = "E"+i;
+    var tr = document.createElement("div"); tr.className = "btrack";
+    var f = document.createElement("div"); f.className = "bfill"; f.style.background = EXPC[i];
+    tr.appendChild(f);
+    var v = document.createElement("span"); v.className = "bval"; v.textContent = "–";
+    row.appendChild(l); row.appendChild(tr); row.appendChild(v);
+    host.appendChild(row);
+    rtBarEls.push({row:row, fill:f, val:v});
+  }
+})();
+function rtRender(){
+  rt.ctx = sizeCanvas(rt.cv, rt.H);
+  rt.W = rt.cv.clientWidth || 460;
+  var ctx = rt.ctx, W = rt.W, H = rt.H;
+  ctx.clearRect(0,0,W,H);
+  /* specialization regions: argmax tint on a coarse grid */
+  var cs = 16, gx, gy, e, best, bl, x, y;
+  for(gx = 0; gx < W; gx += cs){
+    for(gy = 0; gy < H; gy += cs){
+      x = (gx+cs/2)/W; y = (gy+cs/2)/H;
+      best = 0; bl = rtLogit(0,x,y);
+      for(e = 1; e < EXN; e++){ var v = rtLogit(e,x,y); if(v > bl){ bl = v; best = e; } }
+      ctx.fillStyle = EXPC[best];
+      ctx.globalAlpha = 0.14;
+      ctx.fillRect(gx, gy, cs-1, cs-1);
+      ctx.globalAlpha = 1;
+    }
+  }
+  ctx.strokeStyle = "rgba(30,42,60,.5)"; ctx.lineWidth = 1;
+  for(gx = 0; gx < W; gx += cs){ ctx.beginPath(); ctx.moveTo(gx+.5,0); ctx.lineTo(gx+.5,H); ctx.stroke(); }
+  for(gy = 0; gy < H; gy += cs){ ctx.beginPath(); ctx.moveTo(0,gy+.5); ctx.lineTo(W,gy+.5); ctx.stroke(); }
+  /* dots (normalized coords so they survive resize) */
+  rt.dots.forEach(function(d){
+    ctx.fillStyle = EXPC[d.top];
+    ctx.beginPath(); ctx.arc(d.nx*W, d.ny*H, 4.5, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = "rgba(10,14,20,.7)"; ctx.lineWidth = 1; ctx.stroke();
+  });
+}
+function rtShowToken(x, y){
+  var logits = [], e;
+  for(e = 0; e < EXN; e++) logits.push(rtLogit(e,x,y));
+  var k = parseInt(el("rtK").value, 10);
+  var tk = rtTopk(logits, k);
+  var mn = Math.min.apply(null, logits), mx = Math.max.apply(null, logits);
+  for(e = 0; e < EXN; e++){
+    var B = rtBarEls[e];
+    var frac = mx > mn ? (logits[e]-mn)/(mx-mn) : 0.5;
+    B.fill.style.width = Math.max(2, frac*100) + "%";
+    var on = tk.sel.indexOf(e) >= 0;
+    B.row.className = "brow" + (on ? " on" : "");
+    B.val.innerHTML = logits[e].toFixed(2) + (on ? " · <b>w " + tk.ws[e].toFixed(2) + "</b>" : "");
+  }
+  var parts = tk.sel.slice().sort(function(a,b){ return tk.ws[b]-tk.ws[a]; })
+    .map(function(i){ return "<b>" + tk.ws[i].toFixed(2) + "·E" + i + "(x)</b>"; });
+  el("rtOut").innerHTML = "logits → top-" + k + " → softmax over the winners<br>y = " +
+    parts.join(" + ");
+  rt.last = {x:x, y:y, top:tk.sel[0]};
+  rt.dots.push({nx:x, ny:y, top:tk.sel[0]});
+  if(rt.dots.length > 500) rt.dots.shift();
+  rtRender();
+}
+function rtRandom(){
+  rtShowToken(0.03 + 0.94*Math.random(), 0.03 + 0.94*Math.random());
+}
+function rtStopPlay(){
+  rt.playing = false;
+  if(rt.raf) cancelAnimationFrame(rt.raf);
+  el("rtPlay").textContent = "▶ Stream";
+}
+function rtLoop(now){
+  if(!rt.playing) return;
+  if(rt.lastT === 0) rt.lastT = now;
+  var dt = (now - rt.lastT)/1000; rt.lastT = now;
+  rt.acc += dt;
+  if(rt.acc >= 0.8){ rt.acc = 0; rtRandom(); }
+  rt.raf = requestAnimationFrame(rtLoop);
+}
+el("rtPlay").addEventListener("click", function(){
+  if(rt.playing){ rtStopPlay(); return; }
+  rt.playing = true; rt.lastT = 0; rt.acc = 0;
+  el("rtPlay").textContent = "⏸ Pause";
+  rt.raf = requestAnimationFrame(rtLoop);
+});
+el("rtStep").addEventListener("click", function(){ rtStopPlay(); rtRandom(); });
+el("rtClear").addEventListener("click", function(){
+  rtStopPlay(); rt.dots = []; rt.last = null;
+  el("rtOut").innerHTML = "route a token to see its logits, top-k picks and mixing weights";
+  for(var e = 0; e < EXN; e++){
+    rtBarEls[e].fill.style.width = "0%";
+    rtBarEls[e].row.className = "brow";
+    rtBarEls[e].val.textContent = "–";
+  }
+  rtRender();
+});
+el("rtK").addEventListener("change", function(){
+  if(rt.dots.length){ var d = rt.dots[rt.dots.length-1]; rtShowToken(d.nx, d.ny); }
+});
+rt.cv.addEventListener("click", function(ev){
+  rtStopPlay();
+  var r = rt.cv.getBoundingClientRect();
+  var x = clamp((ev.clientX - r.left)/r.width, 0, 1);
+  var y = clamp((ev.clientY - r.top)/r.height, 0, 1);
+  rtShowToken(x, y);
+});
+
+/* =====================================================
+   3. GROUPED GEMM — the sort animation
+   ===================================================== */
+var gd = {cv:el("gdCanvas"), ctx:null, W:0, H:330, B:64, ND:64, cells:[], p:0,
+          playing:false, raf:0, lastT:0};
+function gdPick2(){
+  var a = Math.floor(Math.random()*EXN);
+  var b = Math.floor(Math.random()*(EXN-1));
+  if(b >= a) b++;
+  return [a,b];
+}
+function gdBuild(){
+  gd.B = parseInt(el("gdBatch").value, 10);
+  gd.ND = Math.min(gd.B, 48);
+  gd.cells = [];
+  var i, pk;
+  for(i = 0; i < gd.ND; i++){
+    pk = gdPick2();
+    gd.cells.push({tok:i, e:pk[0], k:0});
+    gd.cells.push({tok:i, e:pk[1], k:1});
+  }
+  gd.p = 0;
+  gdStopPlay();
+  gdMeters();
+  gdRender();
+}
+function gdGeom(){
+  /* returns slot positions for lane A (token order) and lane B (expert-sorted) */
+  var W = gd.W, n = gd.cells.length;
+  var rows = n > 56 ? 2 : 1;
+  var cols = Math.ceil(n/rows);
+  var x0 = 74, x1 = W - 26;
+  var avail = x1 - x0;
+  var cw = Math.min(30, avail/cols - 3);
+  var ch = rows === 2 ? 20 : 26;
+  var yA = rows === 2 ? 52 : 60, yB = rows === 2 ? 168 : 176;
+  var A = [], i;
+  for(i = 0; i < n; i++){
+    var r = Math.floor(i/cols), c = i % cols;
+    A.push({x: x0 + c*(cw+3), y: yA + r*(ch+8), w: cw, h: ch});
+  }
+  var sorted = gd.cells.map(function(c,i2){ return {c:c, i:i2}; })
+    .sort(function(a,b){ return a.c.e - b.c.e || a.i - b.i; });
+  var B = [], segs = [], ce = -1, cs = -1;
+  for(i = 0; i < sorted.length; i++){
+    var r2 = Math.floor(i/cols), c2 = i % cols;
+    B.push({x: x0 + c2*(cw+3), y: yB + r2*(ch+8), w: cw, h: ch, ci: sorted[i].i});
+    if(sorted[i].c.e !== ce){
+      if(ce >= 0) segs.push({e:ce, a:cs, b:i-1});
+      ce = sorted[i].c.e; cs = i;
+    }
+  }
+  if(ce >= 0) segs.push({e:ce, a:cs, b:sorted.length-1});
+  return {A:A, B:B, sorted:sorted, segs:segs, cw:cw, ch:ch, yB:yB, rows:rows,
+          gemY: yB + rows*(ch+8) + 14, x0:x0};
+}
+function gdRender(){
+  gd.ctx = sizeCanvas(gd.cv, gd.H);
+  gd.W = gd.cv.clientWidth || 900;
+  var ctx = gd.ctx, W = gd.W, G = gdGeom(), p = gd.p, i;
+  ctx.clearRect(0,0,W,gd.H);
+  ctx.font = "10px Consolas,monospace";
+  /* lane labels */
+  ctx.fillStyle = "#7d8ca0"; ctx.textAlign = "left";
+  ctx.fillText("after top-2 · token order  (t0a t0b t1a t1b …)", 16, 34);
+  ctx.fillText("sorted by expert · searchsorted boundaries", 16, G.yB - 18);
+  ctx.fillStyle = "#4b5a6e";
+  if(gd.ND < gd.B) ctx.fillText("showing first " + gd.ND + " of " + gd.B + " tokens", 16, gd.H - 10);
+  else ctx.fillText(gd.B + " token" + (gd.B>1?"s":"") + " × top-2 = " + gd.cells.length + " assignments", 16, gd.H - 10);
+  /* ghost cells in lane A — keep a faint expert tint so the origin lane reads after the sort */
+  G.A.forEach(function(s, i2){
+    ctx.fillStyle = EXPC[gd.cells[i2].e];
+    ctx.globalAlpha = .16;
+    ctx.fillRect(s.x, s.y, s.w, s.h);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = "rgba(30,42,60,.9)"; ctx.lineWidth = 1;
+    ctx.strokeRect(s.x+.5, s.y+.5, s.w, s.h);
+  });
+  /* boundaries between expert segments in lane B */
+  ctx.strokeStyle = "#33415a"; ctx.setLineDash([4,4]);
+  G.segs.forEach(function(sg){
+    var xi = G.B[sg.a].x - 2;
+    ctx.beginPath(); ctx.moveTo(xi, G.yB - 8); ctx.lineTo(xi, G.gemY + 26); ctx.stroke();
+  });
+  ctx.setLineDash([]);
+  /* cells: flying from A to B */
+  var n = gd.cells.length;
+  for(i = 0; i < n; i++){
+    var cell = gd.cells[i];
+    var a = G.A[i], b = null, j;
+    for(j = 0; j < G.B.length; j++){ if(G.B[j].ci === i){ b = G.B[j]; break; } }
+    var delay = (i/n)*0.45, t = clamp((p - delay)/0.55, 0, 1), te = ease(t);
+    var x = lerp(a.x, b.x, te), y = lerp(a.y, b.y, te) - 8*Math.sin(Math.PI*te);
+    ctx.fillStyle = EXPC[cell.e];
+    rrect(ctx, x, y, a.w, a.h, 3); ctx.fill();
+    if(a.w >= 20 && t === 0){
+      ctx.fillStyle = "#0a0e14"; ctx.textAlign = "center"; ctx.font = "9px Consolas,monospace";
+      ctx.fillText("t" + cell.tok, a.x + a.w/2, a.y + a.h/2 + 3);
+      ctx.font = "10px Consolas,monospace";
+    }
+  }
+  /* grouped GEMM blocks under lane B */
+  var ga = clamp((p - 0.75)/0.25, 0, 1);
+  if(ga > 0){
+    ctx.globalAlpha = ga;
+    G.segs.forEach(function(sg){
+      var xa = G.B[sg.a].x, xb = G.B[sg.b].x + G.B[sg.b].w;
+      var cnt = sg.b - sg.a + 1;
+      ctx.fillStyle = EXPC[sg.e];
+      rrect(ctx, xa, G.gemY, xb - xa, 18, 4); ctx.fill();
+      ctx.fillStyle = "#0a0e14"; ctx.textAlign = "center"; ctx.font = "9.5px Consolas,monospace";
+      var lab = (xb-xa > 92) ? ("E" + sg.e + " · GEMM m=" + cnt) : ("" + cnt);
+      ctx.fillText(lab, (xa+xb)/2, G.gemY + 12.5);
+      ctx.fillStyle = EXPC[sg.e]; ctx.textAlign = "left";
+      ctx.fillText("E" + sg.e, xa, G.gemY + 31);
+    });
+    ctx.fillStyle = "#4dd0e1"; ctx.textAlign = "left"; ctx.font = "10px Consolas,monospace";
+    ctx.fillText("← contiguous chunk per expert · one grouped GEMM", G.x0 + 4, G.gemY + 50);
+    ctx.globalAlpha = 1;
+  }
+}
+function gdMeters(){
+  var B = gd.B;
+  el("gdAvg").textContent = (B*2/EXN) % 1 === 0 ? String(B*2/EXN) : (B*2/EXN).toFixed(2);
+  el("gdNaive").textContent = "8 × scattered";
+  el("gdGrouped").textContent = "1 grouped";
+  var v, cls;
+  if(B === 1){ v = "poor"; cls = "meter m-bad"; }
+  else if(B === 64){ v = "decent"; cls = "meter"; }
+  else { v = "good"; cls = "meter m-eff"; }
+  el("gdVerdict").textContent = v;
+  el("gdVerdictMeter").className = cls;
+}
+function gdStopPlay(){
+  gd.playing = false;
+  if(gd.raf) cancelAnimationFrame(gd.raf);
+  el("gdPlay").textContent = "▶ Play";
+}
+function gdLoop(now){
+  if(!gd.playing) return;
+  if(gd.lastT === 0) gd.lastT = now;
+  var sp = parseFloat(el("gdSpeed").value);
+  gd.p += (now - gd.lastT)/1000 * 0.6 * sp;
+  gd.lastT = now;
+  if(gd.p >= 1){ gd.p = 1; gdRender(); gdStopPlay(); return; }
+  gdRender();
+  gd.raf = requestAnimationFrame(gdLoop);
+}
+el("gdPlay").addEventListener("click", function(){
+  if(gd.playing){ gdStopPlay(); return; }
+  if(gd.p >= 1) gd.p = 0;
+  gd.playing = true; gd.lastT = 0;
+  el("gdPlay").textContent = "⏸ Pause";
+  gd.raf = requestAnimationFrame(gdLoop);
+});
+el("gdStep").addEventListener("click", function(){ gdStopPlay(); gd.p = Math.min(1, Math.round(gd.p*4+1)/4); gdRender(); });
+el("gdEnd").addEventListener("click", function(){ gdStopPlay(); gd.p = 1; gdRender(); });
+el("gdReset").addEventListener("click", function(){ gdStopPlay(); gd.p = 0; gdRender(); });
+el("gdBatch").addEventListener("change", gdBuild);
+(function gdLegend(){
+  var host = el("gdLegend"), i, s;
+  for(i = 0; i < EXN; i++){
+    s = document.createElement("span");
+    s.innerHTML = "<i style=\"background:" + EXPC[i] + "\"></i>E" + i;
+    host.appendChild(s);
+  }
+})();
+
+/* =====================================================
+   4. EXPERT CACHE — LRU + prefetch
+   ===================================================== */
+var EC = {cv:el("ecCanvas"), ctx:null, W:0, H:270, N:8, slotsN:4, slots:[], k:0, steps:200,
+          dist:"skew", pf:false, stats:null, stream:[], anims:[], flashes:[],
+          playing:false, raf:0, lastT:0, acc:0};
+var EC_RANK = [3,5,1,6,0,2,7,4];          /* popularity order — E3, E5 hot (the book's pair) */
+var EC_PROB = [.48,.30,.11,.05,.025,.018,.012,.005];
+function ecResetState(keepDist){
+  EC.slots = []; EC.k = 0; EC.anims = []; EC.flashes = [];
+  EC.stats = {hits:0, miss:0, steps:0, stall:0, saved:0};
+  EC.stream = [];
+  var i, j;
+  for(i = 0; i < EC.steps; i++) EC.stream.push(ecDraw2());
+  el("ecLog").innerHTML = "<div>cache empty — press play or step</div>";
+  ecMeters(); ecRender();
+}
+function ecDraw2(){
+  var a = ecPick(), b;
+  do { b = ecPick(); } while(b === a);
+  return [a,b];
+}
+function ecPick(){
+  var r = Math.random(), i;
+  if(EC.dist === "skew"){
+    for(i = 0; i < EXN; i++){ r -= EC_PROB[i]; if(r <= 0) return EC_RANK[i]; }
+    return EC_RANK[EXN-1];
+  }
+  return Math.floor(Math.random()*EXN);
+}
+function ecStepOnce(){
+  if(EC.k >= EC.stream.length) return;
+  var need = EC.stream[EC.k];
+  var next = EC.k + 1 < EC.stream.length ? EC.stream[EC.k+1] : null;
+  var now = performance.now();
+  var parts = [], stall = 10;
+  need.forEach(function(e){
+    var at = EC.slots.indexOf(e);
+    if(at >= 0){
+      EC.stats.hits++;
+      EC.slots.splice(at,1); EC.slots.push(e);
+      EC.flashes.push({e:e, kind:"hit", until:now + 700});
+      parts.push("<span class='hit'>E" + e + " ✓ hit</span>");
+    } else {
+      EC.stats.miss++;
+      var predicted = EC.pf && next && next.indexOf(e) >= 0;
+      var ev = null;
+      if(EC.slots.length >= EC.slotsN){
+        ev = EC.slots.shift();
+        parts.push("<span class='ev'>evict E" + ev + "</span> ");
+        EC.flashes.push({e:ev, kind:"ev", until:now + 700});
+      }
+      EC.slots.push(e);
+      EC.anims.push({e:e, t0:now, dur:520});
+      EC.flashes.push({e:e, kind:"miss", until:now + 700});
+      if(predicted){
+        stall += 20; EC.stats.saved += 20;
+        parts.push("<span class='miss'>E" + e + " ✗ miss</span> <span class='pf'>(prefetched — overlapped)</span>");
+      } else {
+        stall += 30;
+        parts.push("<span class='miss'>E" + e + " ✗ miss · load 30 ms</span>");
+      }
+    }
+  });
+  EC.stats.stall += stall; EC.stats.steps++; EC.k++;
+  var lg = el("ecLog");
+  if(EC.k === 1) lg.innerHTML = "";
+  var line = document.createElement("div");
+  line.innerHTML = "step " + EC.k + " · needs " + need.map(function(e){ return "E"+e; }).join(",") +
+    " · " + parts.join(" · ") + " · step " + stall + " ms";
+  lg.appendChild(line);
+  while(lg.children.length > 40) lg.removeChild(lg.firstChild);
+  lg.scrollTop = lg.scrollHeight;
+  ecMeters();
+}
+function ecMeters(){
+  var s = EC.stats;
+  var tot = s.hits + s.miss;
+  var hr = tot ? Math.round(100*s.hits/tot) : 0;
+  el("ecHit").textContent = tot ? hr + "%" : "–";
+  el("ecHit").parentElement.className = "meter " + (hr >= 70 || !tot ? "m-eff" : "m-bad");
+  el("ecMiss").textContent = String(s.miss);
+  el("ecStepMs").textContent = s.steps ? (s.stall/s.steps).toFixed(1) + " ms" : "10 ms";
+  el("ecSaved").textContent = s.saved + " ms";
+}
+function ecRender(){
+  EC.ctx = sizeCanvas(EC.cv, EC.H);
+  EC.W = EC.cv.clientWidth || 900;
+  var ctx = EC.ctx, W = EC.W, H = EC.H, now = performance.now();
+  ctx.clearRect(0,0,W,H);
+  ctx.font = "10px Consolas,monospace";
+  var i, e;
+  /* CPU panel */
+  var cx0 = 14, cw2 = 150;
+  ctx.strokeStyle = "#1e2a3c"; ctx.strokeRect(cx0+.5, 26.5, cw2, H-46);
+  ctx.fillStyle = "#7d8ca0"; ctx.textAlign = "left";
+  ctx.fillText("CPU RAM / disk · 8 experts", cx0+10, 44);
+  var popRank = {};
+  if(EC.dist === "skew") EC_RANK.forEach(function(re,ri){ popRank[re] = EC_PROB[ri]; });
+  for(e = 0; e < EXN; e++){
+    var ey = 56 + e*24;
+    var cached = EC.slots.indexOf(e) >= 0;
+    ctx.fillStyle = cached ? "rgba(63,185,80,.14)" : "#101722";
+    ctx.strokeStyle = cached ? "#3fb950" : "#1e2a3c";
+    rrect(ctx, cx0+10, ey, 92, 19, 4); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = EXPC[e]; ctx.textAlign = "left";
+    ctx.fillText("E" + e + (cached ? " · on GPU" : ""), cx0+17, ey+13);
+    var p = popRank[e] !== undefined ? popRank[e] : 0.125;
+    ctx.fillStyle = "#33415a";
+    ctx.fillRect(cx0+108, ey+7, 30, 5);
+    ctx.fillStyle = EC.dist === "skew" ? "#ff9040" : "#4b5a6e";
+    ctx.fillRect(cx0+108, ey+7, 30*p/0.28, 5);
+  }
+  /* GPU panel */
+  var gw = EC.slotsN*76 + 24, gx0 = W - gw - 14;
+  ctx.strokeStyle = "#2a3547"; ctx.lineWidth = 1.5;
+  ctx.strokeRect(gx0+.5, 26.5, gw, H-46);
+  ctx.fillStyle = "#7d8ca0"; ctx.textAlign = "left"; ctx.lineWidth = 1;
+  ctx.fillText("GPU · HBM — cache " + EC.slotsN + " of 8 (LRU)", gx0+12, 44);
+  for(i = 0; i < EC.slotsN; i++){
+    var sx = gx0 + 12 + i*76, sy = 56;
+    ctx.strokeStyle = "#1e2a3c"; ctx.strokeRect(sx+.5, sy+.5, 64, 46);
+    var se = EC.slots[i];
+    if(se !== undefined){
+      var fl = null, j;
+      for(j = 0; j < EC.flashes.length; j++){
+        if(EC.flashes[j].e === se && EC.flashes[j].until > now){ fl = EC.flashes[j]; break; }
+      }
+      ctx.fillStyle = EXPC[se];
+      rrect(ctx, sx+6, sy+6, 52, 34, 5); ctx.fill();
+      ctx.fillStyle = "#0a0e14"; ctx.font = "600 12px Consolas,monospace";
+      ctx.textAlign = "center";
+      ctx.fillText("E" + se, sx+32, sy+27); ctx.font = "10px Consolas,monospace";
+      if(fl){
+        ctx.strokeStyle = fl.kind === "hit" ? "#3fb950" : (fl.kind === "ev" ? "#f472b6" : "#ff9040");
+        ctx.lineWidth = 2.4; ctx.strokeRect(sx+2.5, sy+2.5, 59, 41); ctx.lineWidth = 1;
+      }
+    }
+    ctx.fillStyle = "#4b5a6e"; ctx.textAlign = "center";
+    ctx.fillText(i === 0 ? "LRU" : (i === EC.slotsN-1 ? "MRU" : "slot " + i), sx+32, sy+58);
+  }
+  /* current step needs */
+  var cur = EC.k < EC.stream.length ? EC.stream[EC.k] : null;
+  if(cur){
+    ctx.fillStyle = "#7d8ca0"; ctx.textAlign = "left";
+    ctx.fillText("next: step " + (EC.k+1) + " · batch needs:", cx0+cw2+26, 44);
+    cur.forEach(function(e2, j2){
+      ctx.fillStyle = EXPC[e2];
+      rrect(ctx, cx0+cw2+26 + j2*76, 54, 64, 24, 5); ctx.fill();
+      ctx.fillStyle = "#0a0e14"; ctx.textAlign = "center";
+      ctx.fillText("E" + e2, cx0+cw2+26 + j2*76 + 32, 70);
+    });
+    if(EC.pf && EC.k + 1 < EC.stream.length){
+      var nx = EC.stream[EC.k+1];
+      ctx.fillStyle = "#4dd0e1"; ctx.textAlign = "left";
+      ctx.fillText("prefetching next: " + nx.map(function(e2){ return "E"+e2; }).join(", ") + "  (2nd CUDA stream)",
+        cx0+cw2+26, 100);
+    }
+  }
+  /* transfer animations across the middle */
+  EC.anims = EC.anims.filter(function(a){ return now - a.t0 < a.dur; });
+  EC.anims.forEach(function(a){
+    var t = (now - a.t0)/a.dur;
+    var from = {x: cx0+cw2+6, y: 56 + a.e*24 + 10};
+    var slotIdx = EC.slots.indexOf(a.e);
+    var to = {x: gx0 + 12 + Math.max(0,slotIdx)*76 + 32, y: 56 + 20};
+    var px = lerp(from.x, to.x, ease(t)), py = lerp(from.y, to.y, ease(t)) - 24*Math.sin(Math.PI*t);
+    ctx.fillStyle = EXPC[a.e];
+    rrect(ctx, px-16, py-9, 32, 18, 5); ctx.fill();
+    ctx.fillStyle = "#0a0e14"; ctx.textAlign = "center"; ctx.font = "9.5px Consolas,monospace";
+    ctx.fillText("E" + a.e, px, py+3.5); ctx.font = "10px Consolas,monospace";
+  });
+  /* LRU arrow under slots */
+  ctx.strokeStyle = "#4b5a6e"; ctx.beginPath();
+  ctx.moveTo(gx0+16, 130); ctx.lineTo(gx0+12+EC.slotsN*76-10, 130); ctx.stroke();
+  ctx.fillStyle = "#4b5a6e"; ctx.textAlign = "left";
+  ctx.fillText("oldest → next evicted", gx0+12, 144);
+  if(EC.flashes.length) EC.flashes = EC.flashes.filter(function(f){ return f.until > now; });
+}
+function ecStopPlay(){
+  EC.playing = false;
+  if(EC.raf) cancelAnimationFrame(EC.raf);
+  el("ecPlay").textContent = "▶ Play";
+}
+function ecLoop(now){
+  if(!EC.playing) return;
+  if(EC.lastT === 0) EC.lastT = now;
+  EC.acc += (now - EC.lastT); EC.lastT = now;
+  if(EC.acc >= 1050){ EC.acc = 0; if(EC.k < EC.stream.length) ecStepOnce(); }
+  if(EC.k >= EC.stream.length){ ecStopPlay(); return; }
+  ecRender();
+  EC.raf = requestAnimationFrame(ecLoop);
+}
+el("ecPlay").addEventListener("click", function(){
+  if(EC.playing){ ecStopPlay(); return; }
+  EC.playing = true; EC.lastT = 0; EC.acc = 0;
+  el("ecPlay").textContent = "⏸ Pause";
+  EC.raf = requestAnimationFrame(ecLoop);
+});
+el("ecStep").addEventListener("click", function(){ ecStopPlay(); ecStepOnce(); ecRender(); });
+el("ecReset").addEventListener("click", function(){ ecStopPlay(); ecResetState(); });
+el("ecSkew").addEventListener("click", function(){
+  EC.dist = "skew";
+  el("ecSkew").classList.add("on"); el("ecUnif").classList.remove("on");
+  ecStopPlay(); ecResetState();
+});
+el("ecUnif").addEventListener("click", function(){
+  EC.dist = "uniform";
+  el("ecUnif").classList.add("on"); el("ecSkew").classList.remove("on");
+  ecStopPlay(); ecResetState();
+});
+el("ecSlots").addEventListener("change", function(){
+  EC.slotsN = parseInt(this.value,10); ecStopPlay(); ecResetState();
+});
+el("ecPf").addEventListener("change", function(){ EC.pf = this.checked; });
+
+/* =====================================================
+   5. LOAD BALANCE
+   ===================================================== */
+var BL = {cv:el("blCanvas"), ctx:null, W:0, H:330, T:32, k:2, skew:0.35, cap:8,
+          toks:[], counts:[], reroutes:[], assigned:0, playing:false, raf:0, lastT:0, acc:0};
+function blRoll(){
+  var i, pk;
+  BL.toks = []; BL.counts = [0,0,0,0,0,0,0,0]; BL.reroutes = []; BL.assigned = 0;
+  for(i = 0; i < BL.T; i++){
+    if(Math.random() < BL.skew){
+      var a = Math.random() < 0.5 ? 1 : 3;
+      var b = a === 1 ? 3 : 1;
+      pk = [a,b];
+    } else {
+      pk = gdPick2();
+    }
+    BL.toks.push({pk:pk, final:[], rer:false});
+  }
+}
+function blAssignOne(){
+  if(BL.assigned >= BL.T) return;
+  var tok = BL.toks[BL.assigned];
+  tok.pk.forEach(function(e){
+    if(BL.counts[e] < BL.cap){
+      BL.counts[e]++; tok.final.push(e);
+    } else {
+      var best = -1, i;
+      for(i = 0; i < EXN; i++){
+        if(BL.counts[i] < BL.cap && (best < 0 || BL.counts[i] < BL.counts[best])) best = i;
+      }
+      if(best < 0){ tok.final.push(e); return; }
+      BL.counts[best]++; tok.final.push(best); tok.rer = true;
+      BL.reroutes.push({from:e, to:best});
+    }
+  });
+  BL.assigned++;
+}
+function blRender(){
+  BL.ctx = sizeCanvas(BL.cv, BL.H);
+  BL.W = BL.cv.clientWidth || 900;
+  var ctx = BL.ctx, W = BL.W, i;
+  ctx.clearRect(0,0,W,BL.H);
+  ctx.font = "10px Consolas,monospace";
+  /* token grid: 2 rows x 16 */
+  var tx0 = 60, tgap = Math.min(46, (W-100)/16);
+  ctx.fillStyle = "#7d8ca0"; ctx.textAlign = "left";
+  ctx.fillText("32 tokens · top-2 each · colored by primary pick", 16, 28);
+  for(i = 0; i < BL.T; i++){
+    var col = i % 16, row = Math.floor(i/16);
+    var x = tx0 + col*tgap, y = 44 + row*30;
+    var done = i < BL.assigned;
+    if(done){
+      ctx.fillStyle = EXPC[BL.toks[i].pk[0]];
+      ctx.beginPath(); ctx.arc(x, y, 8, 0, Math.PI*2); ctx.fill();
+      ctx.strokeStyle = "#0a0e14"; ctx.lineWidth = 1.5; ctx.stroke();
+      if(BL.toks[i].rer){
+        ctx.strokeStyle = "#ff9040"; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(x, y, 11.5, 0, Math.PI*2); ctx.stroke();
+      }
+    } else {
+      ctx.strokeStyle = "#33415a"; ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.arc(x, y, 8, 0, Math.PI*2); ctx.stroke();
+    }
+  }
+  /* expert load bars */
+  var bx0 = 70, bw = Math.min(78, (W-140)/8 - 8);
+  var bmax = 120, by0 = 132;
+  var capY = by0 + bmax - (BL.cap/32)*bmax;
+  for(i = 0; i < EXN; i++){
+    var x = bx0 + i*(bw+8), h = (BL.counts[i]/32)*bmax;
+    ctx.fillStyle = "#101722"; ctx.strokeStyle = "#1e2a3c";
+    ctx.fillRect(x, by0, bw, bmax); ctx.strokeRect(x+.5, by0+.5, bw, bmax);
+    if(h > 0){
+      ctx.fillStyle = EXPC[i];
+      ctx.fillRect(x, by0 + bmax - h, bw, h);
+    }
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#7d8ca0";
+    ctx.fillText("E" + i, x + bw/2, by0 + bmax + 16);
+    var idle2 = BL.counts[i] === 0 && BL.assigned >= 8;
+    ctx.fillStyle = idle2 ? "#ff9040" : "#dbe4ee"; ctx.font = "600 11px Consolas,monospace";
+    ctx.fillText(BL.counts[i] + (idle2 ? " · idle" : ""), x + bw/2, by0 + bmax + 32);
+    ctx.font = "10px Consolas,monospace";
+  }
+  /* capacity line drawn over the bars so it stays visible at any fill level */
+  ctx.setLineDash([5,4]); ctx.strokeStyle = "#ff9040"; ctx.lineWidth = 1.2;
+  ctx.beginPath(); ctx.moveTo(bx0-16, capY); ctx.lineTo(bx0 + 8*(bw+8) - 4, capY); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = "#ff9040"; ctx.textAlign = "left";
+  ctx.fillText("C=" + BL.cap, 18, capY - 6);
+  /* rerouted ticks */
+  var perExp = {};
+  BL.reroutes.forEach(function(r){ (perExp[r.to] = perExp[r.to] || []).push(r.from); });
+  Object.keys(perExp).forEach(function(to){
+    var x = bx0 + (+to)*(bw+8);
+    perExp[to].forEach(function(from, j){
+      ctx.fillStyle = EXPC[from];
+      ctx.fillRect(x + 4 + j*8, by0 + bmax + 44, 6, 8);
+    });
+  });
+  if(BL.reroutes.length){
+    ctx.fillStyle = "#7d8ca0"; ctx.textAlign = "left";
+    ctx.fillText("rerouted here (color = wanted expert)", 20, by0 + bmax + 58);
+  }
+  blMeters();
+}
+function blMeters(){
+  var mx = Math.max.apply(null, BL.counts);
+  var idle = BL.counts.filter(function(c){ return c === 0; }).length;
+  el("blMax").textContent = BL.assigned ? String(mx) : "0";
+  el("blIdle").textContent = String(idle);
+  el("blRer").textContent = String(BL.reroutes.length);
+  el("blShare").textContent = "8";
+  el("blSkewV").textContent = Math.round(BL.skew*100) + "%";
+  el("blCapV").textContent = String(BL.cap);
+}
+function blStopPlay(){
+  BL.playing = false;
+  if(BL.raf) cancelAnimationFrame(BL.raf);
+  el("blPlay").textContent = "▶ Play";
+}
+function blLoop(now){
+  if(!BL.playing) return;
+  if(BL.lastT === 0) BL.lastT = now;
+  BL.acc += (now - BL.lastT); BL.lastT = now;
+  if(BL.acc >= 230){ BL.acc = 0; blAssignOne(); }
+  if(BL.assigned >= BL.T){ blStopPlay(); blRender(); return; }
+  blRender();
+  BL.raf = requestAnimationFrame(blLoop);
+}
+el("blPlay").addEventListener("click", function(){
+  if(BL.playing){ blStopPlay(); return; }
+  if(BL.assigned >= BL.T) blReset();
+  BL.playing = true; BL.lastT = 0; BL.acc = 0;
+  el("blPlay").textContent = "⏸ Pause";
+  BL.raf = requestAnimationFrame(blLoop);
+});
+el("blStep").addEventListener("click", function(){ blStopPlay(); blAssignOne(); blRender(); });
+el("blEnd").addEventListener("click", function(){
+  blStopPlay(); while(BL.assigned < BL.T) blAssignOne(); blRender();
+});
+function blReset(){ blStopPlay(); blRoll(); blRender(); }
+el("blReset").addEventListener("click", blReset);
+el("blSkew").addEventListener("input", function(){
+  BL.skew = parseFloat(this.value); blReset();
+});
+el("blCap").addEventListener("input", function(){
+  BL.cap = parseInt(this.value,10); blReset();
+});
+(function blLegend(){
+  var host = el("blLegend"), i, s;
+  for(i = 0; i < EXN; i++){
+    s = document.createElement("span");
+    s.innerHTML = "<i style=\"background:" + EXPC[i] + "\"></i>E" + i;
+    host.appendChild(s);
+  }
+  s = document.createElement("span");
+  s.innerHTML = "<i style=\"border:2px solid #ff9040;width:10px;height:10px;border-radius:50%;background:transparent\"></i>rerouted token";
+  host.appendChild(s);
+})();
+
+/* =====================================================
+   boot + resize
+   ===================================================== */
+function bootAll(){
+  rtRender();
+  gdRender();
+  ecRender();
+  blRender();
+}
+var rszTimer = null;
+window.addEventListener("resize", function(){
+  if(rszTimer) clearTimeout(rszTimer);
+  rszTimer = setTimeout(bootAll, 150);
+});
+
+/* init */
+gdBuild();
+ecResetState();
+blRoll();
+blRender();
+bootAll();
+
+})();
+</script>
+</body>
+</html>

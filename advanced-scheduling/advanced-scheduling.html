@@ -1,0 +1,1340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Advanced Scheduling — Chunked Prefill, Mixed Batches, CUDA Graphs &amp; Overlap Scheduling</title>
+<style>
+  :root{
+    --bg:#0a0e14; --panel:#101722; --panel2:#0c1220; --border:#1e2a3c;
+    --text:#dbe4ee; --muted:#7d8ca0; --faint:#4b5a6e;
+    --oh:#ff9040; --oh-dim:rgba(255,144,64,.16);
+    --work:#3fb950; --work-dim:rgba(63,185,80,.15);
+    --accent:#58a6ff; --accent-dim:rgba(88,166,255,.14);
+    --attn:#a78bfa; --attn-dim:rgba(167,139,250,.14);
+    --kv:#f472b6; --kv-dim:rgba(244,114,182,.14);
+    --teal:#4dd0e1;
+    --mono:"Cascadia Code","JetBrains Mono",Consolas,ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:16px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+       -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 22px}
+  code,.mono{font-family:var(--mono)}
+  a{color:var(--accent)}
+
+  /* ---------- chrome ---------- */
+  nav.top{position:sticky;top:0;z-index:50;background:rgba(10,14,20,.92);
+          backdrop-filter:blur(8px);border-bottom:1px solid var(--border)}
+  nav.top .wrap{display:flex;gap:4px;overflow-x:auto;padding:10px 22px}
+  nav.top a{color:var(--muted);text-decoration:none;font-size:13px;padding:6px 12px;
+            border-radius:8px;white-space:nowrap}
+  nav.top a:hover{color:var(--text);background:var(--panel)}
+  header{padding:64px 0 40px;position:relative;overflow:hidden}
+  header::before{content:"";position:absolute;inset:0;background:
+      radial-gradient(600px 300px at 15% 0%,rgba(255,144,64,.09),transparent 60%),
+      radial-gradient(700px 340px at 85% 10%,rgba(88,166,255,.09),transparent 60%)}
+  header .wrap{position:relative}
+  .kicker{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.16em;text-transform:uppercase}
+  h1{font-size:clamp(28px,5vw,44px);line-height:1.15;margin:10px 0 12px;letter-spacing:-.01em}
+  h1 .hl{color:var(--accent)}
+  .sub{color:var(--muted);max-width:820px;font-size:17px}
+  .chips{display:flex;gap:12px;flex-wrap:wrap;margin-top:26px}
+  .chip{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:12px 18px;min-width:150px}
+  .chip b{display:block;font-family:var(--mono);font-size:22px;font-weight:600}
+  .chip span{color:var(--muted);font-size:12.5px}
+  .chip.c1 b{color:var(--oh)} .chip.c2 b{color:var(--work)} .chip.c3 b{color:var(--teal)}
+
+  section{padding:56px 0 8px}
+  h2{font-size:clamp(21px,3.4vw,28px);margin:8px 0 14px;letter-spacing:-.01em}
+  h2 .n{font-family:var(--mono);font-size:.72em;color:var(--faint);margin-right:14px;vertical-align:3px}
+  .lead{color:var(--muted);max-width:860px;font-size:15.5px}
+  .lead b{color:var(--text)} .lead code{color:var(--accent);font-size:.9em}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:14px;
+         padding:18px;margin-top:22px}
+  .note{color:var(--faint);font-size:12.5px;margin-top:12px;line-height:1.7}
+  .note b{color:var(--muted)} .note .bad{color:var(--oh)} .note .good{color:var(--work)}
+
+  /* ---------- sims ---------- */
+  .sim-head{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-bottom:12px}
+  .btn{background:var(--panel2);border:1px solid var(--border);color:var(--text);
+       border-radius:9px;padding:8px 16px;font:600 13.5px system-ui;cursor:pointer}
+  .btn:hover{border-color:var(--faint)}
+  .btn.primary{background:var(--accent-dim);border-color:var(--accent);color:var(--accent)}
+  .btn:disabled{opacity:.45;cursor:default}
+  .ctl-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .ctl-row label{color:var(--muted);font-size:12.5px}
+  select{background:var(--panel2);color:var(--text);border:1px solid var(--border);
+         border-radius:8px;padding:7px 10px;font:13px var(--mono)}
+  input[type=range]{accent-color:var(--accent);width:150px}
+  .ctl-val{font-family:var(--mono);font-size:12.5px;color:var(--text);min-width:64px;display:inline-block}
+  canvas.sim{width:100%;display:block;border-radius:10px;background:var(--panel2);
+             border:1px solid var(--border)}
+  .sim-foot{display:flex;flex-wrap:wrap;gap:14px;justify-content:space-between;align-items:flex-start;margin-top:12px}
+  .meters{display:flex;gap:10px;flex-wrap:wrap}
+  .meter{background:var(--panel2);border:1px solid var(--border);border-radius:10px;
+         padding:8px 14px;min-width:104px}
+  .meter b{display:block;font-family:var(--mono);font-size:19px;font-weight:600}
+  .meter span{color:var(--faint);font-size:11px}
+  .meter.m-eff b{color:var(--work)} .meter.m-bad b{color:var(--oh)}
+  .meter.m-blue b{color:var(--accent)} .meter.m-teal b{color:var(--teal)}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:12px}
+  .legend i{display:inline-block;width:14px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+  .lg-pre{background:var(--oh)} .lg-tok{background:var(--work)} .lg-kv{background:var(--kv)}
+  .lg-cpu{background:var(--oh)} .lg-gpu{background:var(--work)}
+  .lg-stall{background:repeating-linear-gradient(45deg,#5a6a80,#5a6a80 3px,#2a3547 3px,#2a3547 6px)}
+  .lg-pad{background:repeating-linear-gradient(45deg,var(--kv),var(--kv) 3px,#8c3a5e 3px,#8c3a5e 6px)}
+  .lg-idle{background:#2a3547}
+  .lg-line{background:var(--accent);height:3px;width:14px;vertical-align:2px;border-radius:2px}
+  .lg-mark{background:transparent;border-left:2px dashed var(--oh);width:0;height:12px;vertical-align:-1px;margin:0 8px 0 6px}
+
+  /* ---------- mixed pipeline svg ---------- */
+  .mp-wrap{display:grid;grid-template-columns:1.45fr 1fr;gap:20px;align-items:start}
+  svg.pipe{width:100%;height:auto;display:block}
+  .pnode rect{fill:var(--panel2);stroke:var(--border);stroke-width:1.5}
+  .pnode text{fill:var(--text);font:600 13px system-ui}
+  .pnode .s2{fill:var(--muted);font:11px var(--mono)}
+  .pnode .s3{fill:var(--faint);font:10px var(--mono)}
+  .pnode{opacity:.42;transition:opacity .35s}
+  .pnode.on{opacity:1}
+  .pnode.on rect{stroke:var(--accent)}
+  .pnode.n-pre rect{stroke:var(--accent)} .pnode.n-dec rect{stroke:var(--work)}
+  .pnode.n-ap rect{stroke:var(--attn)} .pnode.n-ad rect{stroke:var(--kv)}
+  .parrow{stroke:var(--faint);stroke-width:1.6;fill:none}
+  .parrow text{fill:var(--faint);font:11px var(--mono)}
+  .mp-detail{background:var(--panel2);border:1px solid var(--border);border-radius:12px;
+             padding:16px 18px;display:flex;flex-direction:column;gap:8px;min-height:210px}
+  .mp-detail h4{margin:0;font-size:15px;color:var(--accent)}
+  .mp-detail p{margin:0;color:var(--muted);font-size:13.5px;line-height:1.65}
+  .mp-detail .fm{font-family:var(--mono);font-size:12px;color:var(--faint)}
+  .dots{display:flex;gap:6px;margin-top:auto}
+  .dots i{width:8px;height:8px;border-radius:50%;background:var(--border);transition:background .3s}
+  .dots i.on{background:var(--accent)}
+  .pad-ctl{display:flex;gap:22px;flex-wrap:wrap;margin-top:14px}
+  .pad-ctl .ctl-row label{display:block;margin-bottom:2px}
+
+  /* ---------- cuda graphs ---------- */
+  .gr-speed{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+  .sp-chip{background:var(--panel2);border:1px solid var(--border);border-radius:10px;
+           padding:8px 14px;font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .sp-chip b{color:var(--teal)}
+  .buks{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:14px}
+  .buk{width:62px;height:62px;border:1px solid var(--border);border-radius:10px;background:var(--panel2);
+       position:relative;overflow:hidden;display:flex;align-items:flex-end;justify-content:center;
+       transition:border-color .3s}
+  .buk .bf{position:absolute;left:0;right:0;bottom:0;background:rgba(88,166,255,.30);
+       border-top:2px solid var(--accent);transition:height .25s}
+  .buk .bpad{position:absolute;left:0;right:0;top:0;display:none;
+       background:repeating-linear-gradient(45deg,rgba(244,114,182,.45),rgba(244,114,182,.45) 3px,transparent 3px,transparent 6px)}
+  .buk.sel .bpad{display:block}
+  .buk.blit{border-color:rgba(88,166,255,.4)}
+  .buk.sel{outline:2px solid var(--accent);outline-offset:2px}
+  .buk .bl{position:relative;z-index:1;font:700 13px var(--mono);color:var(--text);
+       align-self:center;padding-bottom:2px}
+  .buk.ghost{border-style:dashed}
+  .buk-note{color:var(--faint);font-size:11.5px;font-family:var(--mono)}
+  .pol-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:20px}
+  .pol{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:14px 16px}
+  .pol h4{margin:0 0 8px;font-size:13.5px}
+  .pol h4 code{color:var(--oh);font-size:12.5px}
+  .pol p{margin:0;color:var(--muted);font-size:12.5px;line-height:1.55}
+
+  /* ---------- overlap ---------- */
+  .segbtns{display:flex;gap:0;border:1px solid var(--border);border-radius:9px;overflow:hidden}
+  .segbtn{background:var(--panel2);border:0;color:var(--muted);padding:8px 16px;
+          font:600 13px system-ui;cursor:pointer}
+  .segbtn.on{background:var(--accent-dim);color:var(--accent)}
+  .stage{margin-top:16px;background:var(--panel2);border:1px solid var(--border);border-radius:12px;
+         padding:12px 18px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  .stage ol{margin:0;padding:0;list-style:none;display:flex;gap:8px;flex-wrap:wrap;flex:1}
+  .stage li{background:var(--panel);border:1px solid var(--border);border-radius:8px;color:var(--faint);
+            padding:5px 12px;font-size:12.5px;opacity:.35;transition:opacity .25s,color .25s,border-color .25s}
+  .stage li.on{opacity:1;color:var(--text);border-color:var(--oh)}
+  .stage li.on b{color:var(--oh)}
+  .stage .stg-t{color:var(--faint);font:11px var(--mono);letter-spacing:.08em;text-transform:uppercase}
+
+  /* ---------- one iteration ---------- */
+  .it-legend{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+  .itl{border:1px solid var(--border);background:var(--panel2);color:var(--muted);border-radius:9px;
+       padding:7px 14px;font:600 12.5px system-ui;cursor:pointer;transition:all .25s}
+  .itl:hover{color:var(--text)}
+  .itl.on{color:var(--text)}
+  .itl.t1.on{border-color:var(--oh);background:var(--oh-dim)}
+  .itl.t2.on{border-color:var(--accent);background:var(--accent-dim)}
+  .itl.t3.on{border-color:var(--attn);background:var(--attn-dim)}
+  .itl.t4.on{border-color:var(--work);background:var(--work-dim)}
+  svg.iter{width:100%;height:auto;display:block}
+  .tg{transition:opacity .3s}
+  .tg rect{fill:var(--panel2);stroke:var(--border);stroke-width:1.5}
+  .tg text{fill:var(--text);font:600 12.5px system-ui}
+  .tg .s2{fill:var(--muted);font:10.5px var(--mono)}
+  .tg .s3{fill:var(--faint);font:10px var(--mono)}
+  .tg.g1 rect{stroke:var(--oh)} .tg.g2 rect{stroke:var(--accent)}
+  .tg.g3 rect{stroke:var(--attn)} .tg.g4 rect{stroke:var(--work)}
+  svg.iter.spot-1 .tg:not(.g1),svg.iter.spot-2 .tg:not(.g2),
+  svg.iter.spot-3 .tg:not(.g3),svg.iter.spot-4 .tg:not(.g4){opacity:.14}
+  .iarrow{stroke:var(--faint);stroke-width:1.6;fill:none}
+  .iarrow.dash{stroke-dasharray:5 5;stroke:var(--work)}
+  .iarrow text{fill:var(--faint);font:10.5px var(--mono)}
+  .knobs{margin-top:20px;border:1px solid var(--border);border-radius:12px;overflow:hidden;
+         font-size:12.5px}
+  .knobs .krow{display:grid;grid-template-columns:1.1fr 1fr 1.4fr;gap:0}
+  .knobs .krow>div{padding:9px 14px;border-top:1px solid var(--border);color:var(--muted)}
+  .knobs .krow:first-child>div{border-top:0;background:var(--panel2);color:var(--text);
+      font:600 11.5px var(--mono);letter-spacing:.05em;text-transform:uppercase}
+  .knobs code{color:var(--accent);font-size:11.5px}
+  .knobs .krow>div:first-child{color:var(--text)}
+
+  /* ---------- 6. since the book ---------- */
+  .sota-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:22px}
+  .scard{background:var(--panel2);border:1px solid var(--border);border-radius:12px;
+         padding:16px 18px;position:relative}
+  .scard .when{display:inline-block;font-family:var(--mono);font-size:10.5px;color:var(--accent);
+         background:var(--accent-dim);border-radius:5px;padding:2px 8px;margin-bottom:8px}
+  .scard h4{margin:0 0 8px;font-size:15px}
+  .scard p{margin:0;color:var(--muted);font-size:13px;line-height:1.6}
+  .scard p b{color:var(--text)}
+  .scard .tie{display:block;margin-top:10px;font-family:var(--mono);font-size:11px;color:var(--faint)}
+  .scard .tie b{color:var(--teal);font-weight:600}
+  @media(max-width:940px){ .sota-grid{grid-template-columns:1fr} }
+
+  footer{padding:44px 0 60px;border-top:1px solid var(--border);margin-top:56px}
+  .formula{font-family:var(--mono);font-size:14.5px;color:var(--muted);text-align:center;padding:8px 0 4px;line-height:1.9}
+  .formula b{color:var(--work)} .formula .bad{color:var(--oh)} .formula .dim{color:var(--faint)}
+  .fin{color:var(--faint);text-align:center;font-size:13px;margin-top:10px}
+
+  .reveal{opacity:0;transform:translateY(16px);transition:opacity .6s ease,transform .6s ease}
+  .reveal.in{opacity:1;transform:none}
+
+  @media(max-width:940px){
+    .mp-wrap{grid-template-columns:1fr}
+    .pol-grid{grid-template-columns:1fr}
+  }
+  @media(max-width:700px){
+    .knobs .krow{grid-template-columns:1fr}
+    .knobs .krow>div:first-child{background:var(--panel2);color:var(--text);
+      font:600 11.5px var(--mono);letter-spacing:.05em;text-transform:uppercase}
+  }
+  @media(prefers-reduced-motion:reduce){
+    *{transition:none!important;animation:none!important;scroll-behavior:auto}
+  }
+</style>
+</head>
+<body>
+
+<nav class="top"><div class="wrap">
+  <a href="#chunked">① Chunked prefill</a>
+  <a href="#mixed">② Mixed batches</a>
+  <a href="#graphs">③ CUDA graphs</a>
+  <a href="#overlap">④ Overlap scheduling</a>
+  <a href="#together">⑤ One iteration</a>
+  <a href="#sota">⑥ Since the book</a>
+</div></nav>
+
+<header><div class="wrap">
+  <div class="kicker">GPU Inference · Chapter 8</div>
+  <h1>Advanced scheduling: four ways to keep a serving GPU<br><span class="hl">busy every millisecond</span></h1>
+  <p class="sub">Continuous batching (Chapter 7) decides <em>who</em> runs on each iteration. This chapter is
+     about the iteration itself: a 32K-token prompt no longer walls everyone off for three seconds, prefill
+     and decode share one forward pass without padding waste, 300 kernel launches collapse into a single
+     graph replay, and the CPU prepares the next batch while the GPU is still chewing on the current one.
+     Four interactive simulations below — every number straight from the book.</p>
+  <div class="chips">
+    <div class="chip c1"><b>3000 → 47 ms</b><span>max decode stall, 32K prefill at 512-token chunks</span></div>
+    <div class="chip c2"><b>33% → ~100%</b><span>useful compute in a prefill + decode batch, unpadded</span></div>
+    <div class="chip c3"><b>300 → 1</b><span>kernel launches per decode step, with CUDA graphs</span></div>
+  </div>
+</div></header>
+
+<!-- ============ 1. CHUNKED PREFILL ============ -->
+<section id="chunked"><div class="wrap reveal">
+  <div class="kicker">Section 1 · Interactive</div>
+  <h2><span class="n">01</span>Chunked prefill: slice the wall</h2>
+  <p class="lead">Prefill is compute-bound with time ∝ prompt length <b>squared</b> — a 32K-token prompt on an
+     H100 takes <b>2–5 seconds</b>, and during every one of those milliseconds the decode tokens of all other
+     users are blocked. Chunked prefill breaks the prompt into pieces and interleaves them with decode steps.
+     <b>Pick a chunk size</b> and watch the same workload re-schedule: the orange prefill row shatters into
+     chunks, and the decoder rows below never stall for more than one chunk at a time.</p>
+
+  <div class="panel">
+    <div class="sim-head">
+      <div class="ctl-row">
+        <button class="btn primary" id="ckPlay">▶ Play</button>
+        <button class="btn" id="ckStep">⏭ Step</button>
+        <button class="btn" id="ckEnd">⏩ End</button>
+        <button class="btn" id="ckReset">↺ Reset</button>
+      </div>
+      <div class="ctl-row">
+        <label for="ckChunk">chunk size</label>
+        <select id="ckChunk">
+          <option value="0">no chunking (whole prompt)</option>
+          <option value="2048">2048 tokens</option>
+          <option value="1024">1024 tokens</option>
+          <option value="512" selected>512 tokens (book)</option>
+          <option value="256">256 tokens</option>
+          <option value="128">128 tokens</option>
+        </select>
+        <label for="ckSpeed" style="margin-left:8px">speed</label>
+        <select id="ckSpeed">
+          <option value="0.5">0.5×</option>
+          <option value="1">1×</option>
+          <option value="2" selected>2×</option>
+          <option value="4">4×</option>
+        </select>
+      </div>
+    </div>
+    <canvas class="sim" id="ckCanvas" style="height:400px" role="img"
+      aria-label="Timeline simulation of chunked prefill: a long prompt is sliced into chunks interleaved with decode steps"></canvas>
+    <div class="sim-foot">
+      <div class="meters">
+        <div class="meter m-bad"><b id="ckGap">–</b><span>max decode gap</span></div>
+        <div class="meter m-blue"><b id="ckIter">–</b><span>prefill iterations</span></div>
+        <div class="meter m-teal"><b id="ckFirst">–</b><span>first decode token</span></div>
+        <div class="meter"><b id="ckWall">–</b><span>wall clock</span></div>
+      </div>
+      <div class="legend">
+        <span><i class="lg-pre"></i>prefill chunk</span>
+        <span><i class="lg-tok"></i>decode tokens</span>
+        <span><i class="lg-stall"></i>decodes stalled</span>
+        <span><i class="lg-kv"></i>KV cache built</span>
+        <span><i class="lg-line"></i>now</span>
+      </div>
+    </div>
+    <p class="note">Model from the book: 32K prompt ≈ <b>3000 ms</b> of prefill; a 512-token chunk takes
+       <b>47 ms</b> (64 iterations); one joint decode step for the 6 requests ≈ 5 ms. Without chunking every
+       decoder waits out the full 3000 ms — then bursts. With 512-token chunks the worst a decode token is
+       ever delayed is one chunk: <b class="good">47 ms</b>. The pink strip is the prompt's KV cache: each
+       chunk's attention reads all previous chunks' KV and appends its own — which is why chunking drops
+       straight into the incremental KV-cache design. Total prefill work is unchanged; only its <b>shape</b>
+       in time changes. Prefill time scales as <code>(32K)² × 80 layers × ops / FLOPS</code> — the quadratic
+       is attention over the prompt. Chunk-size tradeoff: smaller → lower decode latency, more scheduling
+       overhead; larger → better compute efficiency, higher decode latency. Production values:
+       <b>256–1024</b> tokens per chunk.</p>
+  </div>
+</div></section>
+
+<!-- ============ 2. MIXED BATCHES ============ -->
+<section id="mixed"><div class="wrap reveal">
+  <div class="kicker">Section 2 · Interactive</div>
+  <h2><span class="n">02</span>Mixed batches: split attention, fuse everything else</h2>
+  <p class="lead">With chunked prefill, one batch can hold <b>512 prefill tokens and a handful of decode
+     tokens</b> — GEMM and GEMV, compute-bound and memory-bound, in the same step. Padded into one rectangle
+     (the book's Figure 4, recreated left) two-thirds of the compute is spent on padding. The fix on the
+     right: attention runs <b>separately</b> per kind — different KV caches, different sequence lengths —
+     while embedding and FFN run once over the <b>concatenated</b> token list, because they are per-token
+     ops with no batch dimension to mismatch.</p>
+
+  <div class="panel">
+    <div class="pg-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+      <div>
+        <h4 style="margin:0 0 4px;font-size:14px">Naive: pad to the longest <span class="tag t-bad" style="font-size:10px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;border-radius:4px;padding:2px 7px;margin-left:8px;background:var(--oh-dim);color:var(--oh)">wastes compute</span></h4>
+        <p style="color:var(--muted);font-size:12.5px;margin:2px 0 12px;line-height:1.55">Every sequence is
+           padded to the prefill's length so the batch is rectangular. Resize the mix:</p>
+        <canvas class="sim" id="mxCanvas" role="img"
+          aria-label="Token grid showing decode sequences padded to the prefill length"></canvas>
+        <div class="meters" style="margin-top:12px">
+          <div class="meter m-bad"><b id="mxEff">33%</b><span>useful compute</span></div>
+          <div class="meter"><b id="mxUse">514</b><span>real tokens</span></div>
+          <div class="meter m-bad"><b id="mxPad">1022</b><span>padded tokens</span></div>
+        </div>
+        <div class="pad-ctl">
+          <div class="ctl-row">
+            <label for="mxChunk">prefill chunk</label>
+            <input type="range" id="mxChunk" min="64" max="1024" step="64" value="512">
+            <span class="ctl-val" id="mxChunkV">512 tok</span>
+          </div>
+          <div class="ctl-row">
+            <label for="mxDec">decode requests</label>
+            <input type="range" id="mxDec" min="1" max="8" step="1" value="2">
+            <span class="ctl-val" id="mxDecV">2</span>
+          </div>
+        </div>
+      </div>
+      <div>
+        <h4 style="margin:0 0 4px;font-size:14px">Mixed forward: no padding <span class="tag t-good" style="font-size:10px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;border-radius:4px;padding:2px 7px;margin-left:8px;background:var(--work-dim);color:var(--work)">one pass, split attention</span></h4>
+        <p style="color:var(--muted);font-size:12.5px;margin:2px 0 12px;line-height:1.55">Step through the
+           forward pass:</p>
+        <svg class="pipe" id="ppSvg" viewBox="0 0 560 394" role="group" aria-label="Mixed batch forward pass pipeline">
+          <g class="pnode n-pre" id="ppIn1"><rect x="20" y="14" width="250" height="34" rx="9"></rect>
+            <text x="145" y="35" text-anchor="middle">prefill tokens · 512</text></g>
+          <g class="pnode n-dec" id="ppIn2"><rect x="290" y="14" width="160" height="34" rx="9"></rect>
+            <text x="370" y="35" text-anchor="middle">decode · 2</text></g>
+          <path class="parrow" d="M145,48 V60 H230 V70" fill="none" marker-end="url(#parr)"></path>
+          <path class="parrow" d="M370,48 V70" marker-end="url(#parr)"></path>
+          <defs><marker id="parr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#4b5a6e"></path></marker></defs>
+          <g class="pnode" id="ppCat1"><rect x="170" y="74" width="230" height="28" rx="8"></rect>
+            <text x="285" y="92" text-anchor="middle">concat — one token list</text></g>
+          <path class="parrow" d="M285,102 V118" marker-end="url(#parr)"></path>
+          <g class="pnode" id="ppEmb"><rect x="170" y="122" width="230" height="34" rx="9"></rect>
+            <text x="285" y="143" text-anchor="middle">Embedding</text></g>
+          <path class="parrow" d="M285,156 V172"></path>
+          <path class="parrow" d="M285,172 V190 H140 V206" fill="none" marker-end="url(#parr)"></path>
+          <path class="parrow" d="M285,172 V190 H430 V206" fill="none" marker-end="url(#parr)"></path>
+          <g class="pnode n-ap" id="ppAttnP"><rect x="30" y="210" width="220" height="72" rx="10"></rect>
+            <text x="140" y="232" text-anchor="middle">Attention · prefill</text>
+            <text x="140" y="252" text-anchor="middle" class="s2">GEMM · compute-bound</text>
+            <text x="140" y="272" text-anchor="middle" class="s3">flashinfer · BatchPrefill…</text></g>
+          <g class="pnode n-ad" id="ppAttnD"><rect x="310" y="210" width="220" height="72" rx="10"></rect>
+            <text x="420" y="232" text-anchor="middle">Attention · decode</text>
+            <text x="420" y="252" text-anchor="middle" class="s2">GEMV · memory-bound</text>
+            <text x="420" y="272" text-anchor="middle" class="s3">paged KV · BatchDecode…</text></g>
+          <path class="parrow" d="M140,282 V296 H285 V304" fill="none" marker-end="url(#parr)"></path>
+          <path class="parrow" d="M420,282 V296 H285 V304" fill="none" marker-end="url(#parr)"></path>
+          <g class="pnode" id="ppFfn"><rect x="170" y="306" width="230" height="34" rx="9"></rect>
+            <text x="285" y="327" text-anchor="middle">concat → FFN</text></g>
+          <path class="parrow" d="M400,323 H470" marker-end="url(#parr)"></path>
+          <g class="pnode" id="ppOut"><rect x="474" y="306" width="72" height="34" rx="9"></rect>
+            <text x="510" y="327" text-anchor="middle" class="s2">LM head</text></g>
+        </svg>
+        <div class="mp-detail" style="margin-top:14px;min-height:170px">
+          <h4 id="ppTitle">1 · concat the inputs</h4>
+          <p id="ppText">All 514 tokens — 512 prefill + 2 decode — enter as one flat list. Nothing is padded:
+             the "batch" is just tokens, and every per-token op can treat them identically.</p>
+          <div class="dots" id="ppDots"></div>
+        </div>
+        <div class="ctl-row" style="margin-top:12px">
+          <button class="btn" id="ppPrev">‹ Prev</button>
+          <button class="btn primary" id="ppNext">Next ›</button>
+          <button class="btn" id="ppReset">↺ Reset</button>
+        </div>
+      </div>
+    </div>
+    <p class="note">Why the split lands exactly at attention: embedding and FFN are <b>per-token</b>
+       operations — no batch dimension, nothing to mismatch — so they fuse over the concatenated list.
+       Attention <b>must be separate anyway</b>: prefill queries attend to a growing KV cache over hundreds
+       of tokens (a GEMM), decode queries to their own paged KV one token at a time (a GEMV). FlashInfer
+       ships the two optimized kernels for exactly this pattern (Chapter 6):
+       <code>BatchPrefillWithPagedKVCacheWrapper</code> and <code>BatchDecodeWithPagedKVCacheWrapper</code>.
+       Scheduling the mix uses a token budget — <code>max_tokens_per_step</code>: prefill chunks are sized to
+       leave room for decode tokens, keeping the step inside memory limits. With no padding, efficiency is
+       <b class="good">514 / 514</b> instead of the book's <b class="bad">(512+1+1) / (512×3) = 33%</b>.</p>
+  </div>
+</div></section>
+
+<!-- ============ 3. CUDA GRAPHS ============ -->
+<section id="graphs"><div class="wrap reveal">
+  <div class="kicker">Section 3 · Interactive</div>
+  <h2><span class="n">03</span>CUDA graphs: 300 launches → 1 replay</h2>
+  <p class="lead">Every kernel launch costs <b>2–10 µs</b> of CPU time, and a decode step issues
+     <b>300+ launches</b>. The overhead is roughly constant — so it dominates exactly where decode lives:
+     small batches. CUDA graphs record the whole launch sequence once, then <b>replay it with a single
+     launch</b> and zero CPU involvement. Drag the batch size and watch the eager CPU lane stay busy the
+     entire step while the graph CPU lane finishes its work in a sliver.</p>
+
+  <div class="panel">
+    <div class="sim-head">
+      <div class="ctl-row">
+        <label for="grBs">decode batch size</label>
+        <input type="range" id="grBs" min="1" max="64" step="1" value="1">
+        <span class="ctl-val" id="grBsV">1</span>
+      </div>
+      <div class="ctl-row">
+        <span style="color:var(--faint);font:11.5px var(--mono)">7B model · 300 launches × 5 µs = 1.5 ms overhead</span>
+      </div>
+    </div>
+    <canvas class="sim" id="grCanvas" style="height:236px" role="img"
+      aria-label="CPU and GPU swimlanes comparing eager kernel launches versus CUDA graph replay"></canvas>
+    <div class="sim-foot">
+      <div class="meters">
+        <div class="meter m-bad"><b id="grOh">30%</b><span>launch overhead / compute</span></div>
+        <div class="meter"><b id="grEager">6.5 ms</b><span>eager step time</span></div>
+        <div class="meter m-eff"><b id="grGraph">5.1 ms</b><span>graph step time</span></div>
+        <div class="meter m-teal"><b id="grSp">1.27×</b><span>speedup</span></div>
+      </div>
+      <div class="legend">
+        <span><i class="lg-gpu"></i>GPU kernels</span>
+        <span><i class="lg-cpu"></i>CPU busy launching</span>
+        <span><i class="lg-idle"></i>CPU idle</span>
+      </div>
+    </div>
+    <div class="gr-speed">
+      <div class="sp-chip">batch 1: 6.5 → 5.1 ms — <b>1.27×</b></div>
+      <div class="sp-chip">batch 4: 8.2 → 6.1 ms — <b>1.34×</b></div>
+      <div class="sp-chip">overhead ≈ constant · batch 32: <b>7.5%</b> vs batch 1: <b>30%</b></div>
+    </div>
+
+    <h4 style="margin:26px 0 6px;font-size:14px">Fixed shapes → pre-captured buckets</h4>
+    <p style="color:var(--muted);font-size:12.5px;margin:0 0 4px;line-height:1.55">Graphs capture specific
+       shapes, so production systems pre-capture the common batch sizes and pad the rest up to the next
+       bucket. Slide the incoming batch:</p>
+    <div class="ctl-row">
+      <label for="bkN">incoming batch</label>
+      <input type="range" id="bkN" min="1" max="40" step="1" value="5">
+      <span class="ctl-val" id="bkNV">5 seqs</span>
+    </div>
+    <div class="buks" id="bkRow">
+      <span class="buk-note">captured graphs →</span>
+      <!-- buckets injected by JS -->
+    </div>
+    <div class="meters" style="margin-top:12px">
+      <div class="meter m-blue"><b id="bkBucket">8</b><span>padded to bucket</span></div>
+      <div class="meter m-bad"><b id="bkWaste">3</b><span>wasted slots</span></div>
+    </div>
+
+    <div class="pol-grid">
+      <div class="pol"><h4><code>Fixed shapes</code></h4>
+        <p>A graph captures exact tensor shapes. Batch size or sequence length changes → a different graph.
+           Hence the bucket ladder above and <code>MultiShapeGraphRunner</code> in the book.</p></div>
+      <div class="pol"><h4><code>No dynamic control flow</code></h4>
+        <p>Data-dependent branches can't be captured — the GPU must follow the recorded path exactly,
+           with no CPU decisions along the way.</p></div>
+      <div class="pol"><h4><code>Memory per graph</code></h4>
+        <p>Each graph allocates its own intermediate buffers. A ladder of shapes costs real VRAM —
+           buckets are chosen deliberately, not exhaustively.</p></div>
+      <div class="pol"><h4><code>Warmup cost</code></h4>
+        <p>Capturing requires running the model once. The first request to hit a new shape pays for it —
+           so shapes are pre-warmed at startup, not on the critical path.</p></div>
+    </div>
+    <p class="note">Why decode is the sweet spot: every decode step processes <b>exactly one token per
+       sequence</b> — only the batch size varies, and the bucket ladder covers it. Prefill shapes vary with
+       prompt length, but chunked prefill (§1) makes <b>them</b> predictable too: a fixed chunk size is a
+       fixed shape. Record with <code>torch.cuda.graph(...)</code> around the model, then per step:
+       <code>static_input.copy_(x); graph.replay(); return static_output.clone()</code>.</p>
+  </div>
+</div></section>
+
+<!-- ============ 4. OVERLAP SCHEDULING ============ -->
+<section id="overlap"><div class="wrap reveal">
+  <div class="kicker">Section 4 · Interactive</div>
+  <h2><span class="n">04</span>Overlap scheduling: hide the CPU under the GPU</h2>
+  <p class="lead">Someone has to decide what runs next — check completions, pick sequences, build the input
+     tensors, update KV pointers. If that CPU work runs <b>after</b> the GPU finishes, the GPU idles:
+     the book's 2 ms of scheduling against 10 ms of compute forfeits <b>2/12 = 17%</b> of throughput.
+     The fix (Figure 5, recreated): while step <b>N</b> runs on the GPU, the CPU prepares step
+     <b>N+1</b>. Toggle the modes and drag the timings.</p>
+
+  <div class="panel">
+    <div class="sim-head">
+      <div class="ctl-row">
+        <div class="segbtns">
+          <button class="segbtn on" id="ovSeq">Sequential</button>
+          <button class="segbtn" id="ovOvl">Overlapped</button>
+        </div>
+        <button class="btn primary" id="ovPlay">▶ Play</button>
+        <button class="btn" id="ovReset">↺ Reset</button>
+      </div>
+      <div class="ctl-row">
+        <label for="ovS">schedule</label>
+        <input type="range" id="ovS" min="1" max="5" step="0.5" value="2">
+        <span class="ctl-val" id="ovSV">2.0 ms</span>
+        <label for="ovC" style="margin-left:8px">compute</label>
+        <input type="range" id="ovC" min="5" max="20" step="0.5" value="10">
+        <span class="ctl-val" id="ovCV">10.0 ms</span>
+      </div>
+    </div>
+    <canvas class="sim" id="ovCanvas" style="height:190px" role="img"
+      aria-label="CPU and GPU swimlanes showing sequential versus overlapped scheduling"></canvas>
+    <div class="sim-foot">
+      <div class="meters">
+        <div class="meter m-bad"><b id="ovIdle">17%</b><span>GPU idle</span></div>
+        <div class="meter"><b id="ovSeqT">1000</b><span>tok/s · sequential</span></div>
+        <div class="meter m-eff"><b id="ovOvlT">1200</b><span>tok/s · overlapped (model)</span></div>
+        <div class="meter m-teal"><b id="ovGain">+20%</b><span>gain (book: +15%)</span></div>
+      </div>
+      <div class="legend">
+        <span><i class="lg-gpu"></i>GPU: forward pass</span>
+        <span><i class="lg-cpu"></i>CPU: scheduling</span>
+        <span><i class="lg-stall"></i>GPU idle</span>
+        <span><i class="lg-line"></i>now</span>
+      </div>
+    </div>
+    <div class="stage">
+      <span class="stg-t">the CPU's 2 ms:</span>
+      <ol id="ovSteps">
+        <li>check which sequences <b>completed</b></li>
+        <li><b>select</b> next sequences (chunk, budget)</li>
+        <li>prepare <b>tensors</b> — ids · positions · masks</li>
+        <li>update <b>KV cache pointers</b></li>
+      </ol>
+    </div>
+    <p class="note">Implementation in the book: a scheduling thread plus a lock — the run loop starts
+       <code>_schedule_next</code> on a thread, forwards the current batch, then <code>join()</code>s before
+       using the result. Finer-grained still: two CUDA <b>streams</b> — compute and transfer — so the next
+       batch's H2D copy (<code>non_blocking=True</code>) overlaps compute too. Gains grow when scheduling is
+       complex (radix matching, priority queues: <b>1–5 ms</b>), batches are small, or request rates are
+       high. Model above: overlapped throughput = 1000 × (c+s)/c → <b>+20%</b> at 2/10; the book's
+       measurement lands at <b class="good">1000 → 1150 tok/s (+15%)</b>. SGLang runs its scheduler on a
+       separate thread <b>by default</b>.</p>
+  </div>
+</div></section>
+
+<!-- ============ 5. ONE ITERATION ============ -->
+<section id="together"><div class="wrap reveal">
+  <div class="kicker">Section 5 · Interactive</div>
+  <h2><span class="n">05</span>One iteration, all four</h2>
+  <p class="lead">A production engine runs all four techniques <b>in the same iteration</b>. The diagram
+     below is one loop of the scheduler; <b>click a technique</b> to spotlight where it acts.</p>
+
+  <div class="panel">
+    <div class="it-legend">
+      <button class="itl t1" data-t="1">① chunked prefill</button>
+      <button class="itl t2" data-t="2">② mixed batch</button>
+      <button class="itl t3" data-t="3">③ CUDA graphs</button>
+      <button class="itl t4" data-t="4">④ overlap scheduling</button>
+    </div>
+    <svg class="iter" id="itSvg" viewBox="0 0 760 316" role="group" aria-label="One scheduler iteration combining the four techniques">
+      <defs><marker id="iarr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#4b5a6e"></path></marker></defs>
+
+      <g class="tg g1" id="itg1">
+        <rect x="16" y="34" width="150" height="52" rx="10"></rect>
+        <text x="91" y="56" text-anchor="middle">① slice prompt</text>
+        <text x="91" y="72" text-anchor="middle" class="s2">32K → 64 × 512</text>
+      </g>
+      <g class="tg">
+        <rect x="16" y="130" width="150" height="44" rx="10"></rect>
+        <text x="91" y="149" text-anchor="middle">decode queue</text>
+        <text x="91" y="164" text-anchor="middle" class="s2">1 token / seq</text>
+      </g>
+      <path class="iarrow" d="M166,60 H214" marker-end="url(#iarr)"></path>
+      <path class="iarrow" d="M166,152 H214 V96" fill="none" marker-end="url(#iarr)"></path>
+
+      <g class="tg g2" id="itg2">
+        <rect x="218" y="76" width="170" height="66" rx="10"></rect>
+        <text x="303" y="98" text-anchor="middle">② mixed batch</text>
+        <text x="303" y="114" text-anchor="middle" class="s2">token budget</text>
+        <text x="303" y="130" text-anchor="middle" class="s3">512 prefill + N decode</text>
+      </g>
+      <path class="iarrow" d="M388,109 H436" marker-end="url(#iarr)"></path>
+
+      <g class="tg g3" id="itg3">
+        <rect x="440" y="30" width="180" height="158" rx="10"></rect>
+        <text x="530" y="54" text-anchor="middle">③ forward pass</text>
+        <text x="530" y="76" text-anchor="middle" class="s2">decode → graph replay</text>
+        <text x="530" y="92" text-anchor="middle" class="s3">1 launch · bucket 1…32</text>
+        <text x="530" y="116" text-anchor="middle" class="s2">prefill chunk → eager</text>
+        <text x="530" y="132" text-anchor="middle" class="s3">fixed 512-token shape</text>
+        <text x="530" y="156" text-anchor="middle" class="s2">attention split · FFN fused</text>
+        <text x="530" y="172" text-anchor="middle" class="s3">FlashInfer kernels</text>
+      </g>
+      <path class="iarrow" d="M530,188 V226" marker-end="url(#iarr)"></path>
+      <g class="tg">
+        <rect x="452" y="230" width="156" height="40" rx="10"></rect>
+        <text x="530" y="247" text-anchor="middle">tokens out</text>
+        <text x="530" y="262" text-anchor="middle" class="s3">sample → next queue</text>
+      </g>
+
+      <g class="tg g4" id="itg4">
+        <rect x="16" y="230" width="420" height="56" rx="10"></rect>
+        <text x="226" y="252" text-anchor="middle">④ CPU thread — overlap</text>
+        <text x="226" y="270" text-anchor="middle" class="s2">while the GPU runs step N: build step N+1</text>
+      </g>
+      <path class="iarrow dash" d="M216,230 V198 H300 V142" fill="none" marker-end="url(#iarr)"></path>
+      <text x="228" y="212" class="s3">next batch ready before the GPU needs it</text>
+    </svg>
+
+    <div class="knobs">
+      <div class="krow"><div>knob</div><div>book (2024)</div><div>production (2026)</div></div>
+      <div class="krow"><div>chunk size</div><div><code>512</code> · typical 256–1024</div>
+        <div>on by default in vLLM V1; SGLang <code>--chunked-prefill-size</code> in the thousands</div></div>
+      <div class="krow"><div>token budget</div><div><code>max_tokens_per_step</code></div>
+        <div>vLLM <code>max_num_batched_tokens</code> — chunk sized to leave room for decodes</div></div>
+      <div class="krow"><div>graph shapes</div><div>pre-capture 1, 2, 4, 8, 16, 32</div>
+        <div>auto-sized buckets to <code>cuda_graph_max_bs</code> (SGLang) / <code>cuda_graph_sizes</code> (vLLM)</div></div>
+      <div class="krow"><div>overlap</div><div>DIY thread + lock</div>
+        <div>SGLang on by default; vLLM async scheduling — §6</div></div>
+    </div>
+  </div>
+</div></section>
+
+<!-- ============ 6. SINCE THE BOOK ============ -->
+<section id="sota"><div class="wrap reveal">
+  <div class="kicker">Section 6 · October 2026</div>
+  <h2><span class="n">06</span>Since the book: scheduling in 2026</h2>
+  <p class="lead">Every technique in this chapter started as a paper or a flag and ended up as a
+     <b>default</b>. Six things that changed, each tied back to the section it grew out of.</p>
+
+  <div class="panel">
+    <div class="sota-grid">
+      <div class="scard">
+        <span class="when">OSDI '24</span>
+        <h4>This chapter has a name: Sarathi-Serve</h4>
+        <p>The chunked-prefill + piggybacked-decode pair (§1 + §2) is <b>stall-free batching</b> from
+           Sarathi-Serve (Microsoft Research &amp; UW-Madison): split prefills into chunks, let decodes ride
+           along in the same batch, adapt chunk size to load. It sustained up to <b>2.2× the load</b> at the
+           same latency SLOs versus then-vLLM/Orca baselines — and every major engine adopted the idea.</p>
+        <span class="tie">← grows <b>§1 + §2</b>: the book's first two sections are one paper</span>
+      </div>
+      <div class="scard">
+        <span class="when">2025 → 2026</span>
+        <h4>Chunked prefill became the default</h4>
+        <p>No longer an opt-in flag: vLLM's V1 engine ships chunked prefill <b>on by default</b> (trading a
+           little TTFT for much better TPOT), and SGLang exposes <code>--chunked-prefill-size</code> with
+           defaults in the <b>thousands of tokens</b> — bigger than the book's 512 because newer GPUs digest
+           larger chunks before decode delay hurts. The knob that survived is the §2 token budget.</p>
+        <span class="tie">← grows <b>§1</b>: everyone now ships the 47 ms promise</span>
+      </div>
+      <div class="scard">
+        <span class="when">2025</span>
+        <h4>CUDA graphs escaped fixed shapes</h4>
+        <p>The bucket ladder (§3) was the workaround; <b>piecewise compilation</b> is the fix: vLLM V1's
+           default compilation mode splits the model at attention (dynamic) and captures everything else as
+           CUDA graphs via <b>torch.compile</b> — graph replay without hand-curated shape lists, and full-graph
+           capture for supported models. The book's "fixed shapes" limitation is now mostly gone.</p>
+        <span class="tie">← grows <b>§3</b>: replay by default, buckets as fallback</span>
+      </div>
+      <div class="scard">
+        <span class="when">2025 → 2026</span>
+        <h4>Schedulers went async-first</h4>
+        <p>The book's DIY thread-plus-lock (§4) became architecture: SGLang has run its scheduler on a
+           separate thread since v0.4.x and pushed toward <b>"zero-overhead" scheduling</b> — making input
+           prep itself CUDA-graphable; vLLM's Model Runner V2 (default since Sep 2026) rebuilt the engine
+           around persistent batching, async scheduling and GPU-native input prep. The GPU never waits for
+           the CPU anymore, by construction.</p>
+        <span class="tie">← grows <b>§4</b>: overlap graduated from trick to architecture</span>
+      </div>
+      <div class="scard">
+        <span class="when">FAST '25 → 2026</span>
+        <h4>The other answer: don't share the GPU at all</h4>
+        <p>Chunking <em>shares</em> the GPU between prefill and decode; <b>disaggregation</b> separates them
+           onto different machines — Mooncake (Kimi, FAST '25), NVIDIA Dynamo, DistServe, with vLLM's
+           KV-affinity router and RDMA KV transfer shipping since (Chapter 7 §6). Long-context and
+           agent-heavy workloads lean disaggregated; general serving leans chunked. Both descend from the
+           same observation: prefill and decode interfere.</p>
+        <span class="tie">← grows <b>§1 + §2</b>: manage the interference, or remove it</span>
+      </div>
+      <div class="scard">
+        <span class="when">2026</span>
+        <h4>The techniques compose multiplicatively</h4>
+        <p>Nothing here was superseded — they stack: chunked prefill feeds the mixed batch a fixed shape,
+           fixed shapes make decode graph-capturable, graphs shrink the CPU's per-step work to a single
+           replay call, and overlap hides what remains. Engines that put it all together serve DeepSeek-class
+           MoE models at <b>~2.2k tok/s per H200</b> — the Chapter 9 / Chapter 10 story.</p>
+        <span class="tie">← grows <b>§5</b>: one iteration, four techniques, zero idle</span>
+      </div>
+    </div>
+    <p class="note">Sources: Sarathi-Serve (Patel et al., <b>OSDI '24</b>, arXiv:2403.02310); vLLM V1 engine
+       + piecewise CUDA graph compilation (vLLM blog &amp; release notes, 2025; technical report
+       arXiv:2509.11390); SGLang release notes (overlap scheduling default, zero-overhead scheduler);
+       Mooncake (FAST '25). 2026 items follow the Chapter 7 page's survey, checked then.</p>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <div class="formula">
+    decode stall <span class="dim">=</span> one chunk: <span class="bad">3000 ms</span> <span class="dim">→</span> <b>47 ms</b> <span class="dim">@512</span>
+    &nbsp;&nbsp;<span class="dim">·</span>&nbsp;&nbsp; mixed batch: <span class="bad">33%</span> <span class="dim">→</span> <b>~100%</b> <span class="dim">useful</span><br>
+    <span class="dim">launches:</span> 300 <span class="dim">×</span> 5 µs <span class="dim">=</span> 1.5 ms <span class="dim">→</span> <b>1 replay</b> <span class="dim">(1.27–1.34×)</span>
+    &nbsp;&nbsp;<span class="dim">·</span>&nbsp;&nbsp; <span class="dim">overlap:</span> GPU never waits <span class="dim">— +15% measured</span>
+  </div>
+  <p class="fin">Chapter 8 · Advanced Scheduling — companion to <code>book/08-advanced-scheduling.md</code>.
+     §6 survey updated October 2026. Next: Chapter 9 — Mixture of Experts.</p>
+</div></footer>
+
+<script>
+(function(){
+"use strict";
+
+/* ================= reveal on scroll ================= */
+var io = ("IntersectionObserver" in window)
+  ? new IntersectionObserver(function(es){
+      es.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add("in"); io.unobserve(e.target);} });
+    }, {threshold:.12})
+  : null;
+document.querySelectorAll(".reveal").forEach(function(el){ io ? io.observe(el) : el.classList.add("in"); });
+
+/* ================= helpers ================= */
+function el(id){ return document.getElementById(id); }
+function mkHatch(color){
+  var p = document.createElement("canvas"); p.width = p.height = 8;
+  var c = p.getContext("2d");
+  c.strokeStyle = color; c.lineWidth = 2;
+  c.beginPath(); c.moveTo(-2,10); c.lineTo(10,-2); c.moveTo(-2,6); c.lineTo(6,-2); c.stroke();
+  return p;
+}
+var HATCH_G = mkHatch("rgba(125,140,160,.55)");
+var HATCH_P = mkHatch("rgba(244,114,182,.55)");
+function sizeCanvas(cv, h){
+  var dpr = window.devicePixelRatio || 1;
+  var w = cv.clientWidth || 900;
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  var ctx = cv.getContext("2d"); ctx.setTransform(dpr,0,0,dpr,0,0);
+  return ctx;
+}
+function rrect(ctx,x,y,w,h,r){
+  r = Math.max(0, Math.min(r, h/2, w/2));
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r);
+  ctx.closePath();
+}
+function fmtMs(v){
+  if(v >= 1000) return (v/1000).toFixed(v>=10000?0:2).replace(/\.?0+$/,"") + " s";
+  return Math.round(v) + " ms";
+}
+function blabel(ctx, text, x, y, color){
+  /* small canvas label with a solid backing so it reads over hatching/stripes */
+  var w = ctx.measureText(text).width;
+  ctx.fillStyle = "#0c1220";
+  ctx.fillRect(x - 2, y - 9, w + 4, 12);
+  ctx.fillStyle = color;
+  ctx.textAlign = "left";
+  ctx.fillText(text, x, y);
+}
+
+/* =====================================================
+   1. CHUNKED PREFILL SIM
+   ===================================================== */
+var CK = {PRE_TOK:32768, PRE_MS:3000, DEC_MS:5, NDEC:6, DEC_TOK:40, XMAX:3400};
+var ck = {cv:el("ckCanvas"), ctx:null, W:0, H:400, t:0, playing:false, raf:0, last:0, s:null};
+
+function ckBuild(){
+  var chunk = parseInt(el("ckChunk").value, 10);
+  var s = {chunk:chunk, p:[], decs:[], bounds:[0], wall:0, maxGap:0, iters:0, firstTok:0};
+  var i, j, t0;
+  for(i = 0; i < CK.NDEC; i++) s.decs.push([]);
+  if(!chunk){
+    s.p.push({t:0, d:CK.PRE_MS, k:"pre"});
+    s.decs.forEach(function(a){ a.push({t:0, d:CK.PRE_MS, k:"stall"}); });
+    for(j = 0; j < CK.DEC_TOK; j++){
+      t0 = CK.PRE_MS + j*CK.DEC_MS;
+      s.decs.forEach(function(a){ a.push({t:t0, d:CK.DEC_MS, k:"tok"}); });
+    }
+    s.maxGap = CK.PRE_MS; s.iters = 1; s.firstTok = CK.PRE_MS + CK.DEC_MS;
+  } else {
+    var n = Math.ceil(CK.PRE_TOK / chunk), tc = CK.PRE_MS * chunk / CK.PRE_TOK;
+    var ci = 0, dj = 0, t = 0;
+    while(ci < n || dj < CK.DEC_TOK){
+      if(ci < n){ s.p.push({t:t, d:tc, k:"pre"}); t += tc; ci++; }
+      if(dj < CK.DEC_TOK){
+        var tt = t;
+        s.decs.forEach(function(a){ a.push({t:tt, d:CK.DEC_MS, k:"tok"}); });
+        t += CK.DEC_MS; dj++;
+      }
+    }
+    s.maxGap = tc + CK.DEC_MS; s.iters = n; s.firstTok = tc + CK.DEC_MS;
+  }
+  var all = s.p.slice();
+  s.decs.forEach(function(a){ all = all.concat(a); });
+  var bmap = {0:1}, wall = 0;
+  all.forEach(function(g){ bmap[g.t] = 1; bmap[g.t + g.d] = 1; if(g.t + g.d > wall) wall = g.t + g.d; });
+  s.wall = wall;
+  s.bounds = Object.keys(bmap).map(Number).sort(function(a,b){ return a-b; });
+  ck.s = s; ck.t = 0;
+  ckMeters(); ckDraw();
+}
+function ckX(ms){
+  var padL = 88, padR = 14, s = ck.s;
+  return padL + (ms / s.wall) * (ck.W - padL - padR);
+}
+function ckDraw(){
+  if(!ck.ctx) return;
+  var ctx = ck.ctx, s = ck.s, t = ck.t;
+  ctx.clearRect(0, 0, ck.W, ck.H);
+  /* grid */
+  ctx.strokeStyle = "rgba(30,42,60,.8)"; ctx.lineWidth = 1;
+  ctx.fillStyle = "#4b5a6e"; ctx.font = "10px Consolas,monospace"; ctx.textAlign = "center";
+  var g;
+  for(g = 0; g <= s.wall; g += 500){
+    var gx = ckX(g);
+    if(gx > ck.W - 4) continue;
+    ctx.beginPath(); ctx.moveTo(gx, 12); ctx.lineTo(gx, ck.H - 26); ctx.stroke();
+    ctx.fillText(g + " ms", gx, ck.H - 12);
+  }
+  var top = 12;
+  /* prefill row */
+  var py = 24, ph = 24;
+  ctx.fillStyle = "#7d8ca0"; ctx.textAlign = "right"; ctx.font = "10px Consolas,monospace";
+  ctx.fillText("#P · 32K", ckX(0) - 12, py + ph/2 + 3);
+  s.p.forEach(function(seg){
+    var b = Math.min(seg.t + seg.d, t);
+    if(b <= seg.t) return;
+    ctx.fillStyle = "#ff9040";
+    rrect(ctx, ckX(seg.t), py, ckX(b) - ckX(seg.t), ph, 3); ctx.fill();
+  });
+  /* KV strip: fraction of prefill compute completed */
+  var ky = py + ph + 5, kh = 7;
+  var kvMs = 0;
+  s.p.forEach(function(seg){
+    if(t >= seg.t + seg.d) kvMs += seg.d;
+    else if(t > seg.t) kvMs += t - seg.t;
+  });
+  ctx.strokeStyle = "#1e2a3c"; ctx.lineWidth = 1;
+  ctx.strokeRect(ckX(0), ky, ckX(s.wall) - ckX(0), kh);
+  ctx.fillStyle = "#f472b6";
+  var kvw = (ckX(s.wall) - ckX(0)) * Math.min(1, kvMs / CK.PRE_MS);
+  if(kvw > 0){ rrect(ctx, ckX(0), ky, kvw, kh, 2); ctx.fill(); }
+  ctx.fillStyle = "#f472b6"; ctx.textAlign = "right"; ctx.font = "10px Consolas,monospace";
+  ctx.fillText("KV " + Math.round(kvMs / CK.PRE_MS * 32.768) + "K/32K", ckX(0) - 12, ky + kh + 2);
+  /* unblock marker in full mode */
+  if(!s.chunk && t >= 0){
+    var mx2 = ckX(CK.PRE_MS);
+    ctx.strokeStyle = "#ff9040"; ctx.setLineDash([6,5]); ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.moveTo(mx2, top); ctx.lineTo(mx2, ck.H - 26); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#ff9040"; ctx.textAlign = "left"; ctx.font = "10px Consolas,monospace";
+    ctx.fillText("decodes unblock", mx2 + 6, top + 12);
+  }
+  /* decoder rows */
+  var dy0 = ky + 20, rowH = (ck.H - 30 - dy0) / CK.NDEC;
+  s.decs.forEach(function(a, i){
+    var y = dy0 + i * rowH, h = Math.max(rowH - 12, 6);
+    ctx.fillStyle = "#7d8ca0"; ctx.textAlign = "right"; ctx.font = "10px Consolas,monospace";
+    ctx.fillText("#D" + i, ckX(0) - 12, y + h/2 + 3);
+    a.forEach(function(seg){
+      var b = Math.min(seg.t + seg.d, t);
+      if(b <= seg.t) return;
+      var xx = ckX(seg.t), ww = Math.max(ckX(b) - ckX(seg.t), 1);
+      if(seg.k === "stall"){
+        ctx.fillStyle = ctx.createPattern(HATCH_G, "repeat");
+        ctx.fillRect(xx, y, ww, h);
+      } else {
+        ctx.fillStyle = "#3fb950";
+        rrect(ctx, xx, y, ww, h, 2); ctx.fill();
+      }
+    });
+  });
+  /* playhead */
+  if(t > 0){
+    var px = ckX(Math.min(t, s.wall));
+    ctx.strokeStyle = "#58a6ff"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(px, top - 4); ctx.lineTo(px, ck.H - 26); ctx.stroke();
+    ctx.fillStyle = "#58a6ff"; ctx.textAlign = "center"; ctx.font = "10px Consolas,monospace";
+    ctx.fillText("t=" + Math.round(Math.min(t, s.wall)) + "ms", px, Math.max(top - 10, 10));
+  }
+}
+function ckMeters(){
+  var s = ck.s;
+  el("ckGap").textContent  = fmtMs(s.maxGap);
+  el("ckGap").parentElement.className = "meter " + (s.maxGap > 200 ? "m-bad" : "m-eff");
+  el("ckIter").textContent = String(s.iters);
+  el("ckFirst").textContent = fmtMs(s.firstTok);
+  el("ckWall").textContent = fmtMs(s.wall);
+}
+function ckStopPlay(){
+  ck.playing = false;
+  if(ck.raf) cancelAnimationFrame(ck.raf);
+  el("ckPlay").textContent = "▶ Play";
+}
+function ckLoop(now){
+  if(!ck.playing) return;
+  if(ck.last === 0) ck.last = now;
+  var speed = parseFloat(el("ckSpeed").value);
+  ck.t += (now - ck.last) / 1000 * 500 * speed;    /* 500 sim-ms per real second at 1× */
+  ck.last = now;
+  if(ck.t >= ck.s.wall){ ck.t = ck.s.wall; ckDraw(); ckStopPlay(); return; }
+  ckDraw();
+  ck.raf = requestAnimationFrame(ckLoop);
+}
+el("ckPlay").addEventListener("click", function(){
+  if(ck.playing){ ckStopPlay(); return; }
+  if(ck.t >= ck.s.wall) ck.t = 0;
+  ck.playing = true; ck.last = 0;
+  el("ckPlay").textContent = "⏸ Pause";
+  ck.raf = requestAnimationFrame(ckLoop);
+});
+el("ckStep").addEventListener("click", function(){
+  ckStopPlay();
+  var b = ck.s.bounds.filter(function(x){ return x > ck.t + 0.01; });
+  ck.t = b.length ? b[0] : ck.s.wall;
+  ckDraw();
+});
+el("ckEnd").addEventListener("click", function(){ ckStopPlay(); ck.t = ck.s.wall; ckDraw(); });
+el("ckReset").addEventListener("click", function(){ ckStopPlay(); ck.t = 0; ckDraw(); });
+el("ckChunk").addEventListener("change", function(){ ckStopPlay(); ckBuild(); });
+
+/* =====================================================
+   2a. NAIVE PADDING GRID
+   ===================================================== */
+var mx = {cv:el("mxCanvas"), ctx:null, W:0, chunk:512, dec:2};
+function mxRender(){
+  var rows = 1 + mx.dec;
+  var H = 14 + rows * 40 + 8;
+  mx.ctx = sizeCanvas(mx.cv, H);
+  mx.W = mx.cv.clientWidth || 480;
+  var ctx = mx.ctx;
+  ctx.clearRect(0, 0, mx.W, H);
+  var x0 = 44, x1 = mx.W - 12;
+  var px = (x1 - x0) / mx.chunk;    /* px per token */
+  /* prefill row */
+  var y = 14;
+  ctx.fillStyle = "#7d8ca0"; ctx.textAlign = "right"; ctx.font = "10px Consolas,monospace";
+  ctx.fillText("#P", x0 - 8, y + 14);
+  ctx.fillStyle = "#58a6ff";
+  rrect(ctx, x0, y, x1 - x0, 26, 3); ctx.fill();
+  ctx.strokeStyle = "rgba(10,14,20,.5)"; ctx.lineWidth = 1;
+  var tk;
+  for(tk = 128; tk < mx.chunk; tk += 128){
+    ctx.beginPath(); ctx.moveTo(x0 + tk * px, y + 3); ctx.lineTo(x0 + tk * px, y + 23); ctx.stroke();
+  }
+  ctx.fillStyle = "#0a0e14"; ctx.textAlign = "left"; ctx.font = "10px Consolas,monospace";
+  ctx.fillText(mx.chunk + " real tokens", x0 + 6, y + 17);
+  /* decode rows */
+  var i;
+  for(i = 0; i < mx.dec; i++){
+    var yy = y + 30 + i * 40 + 4;
+    ctx.fillStyle = "#7d8ca0"; ctx.textAlign = "right"; ctx.font = "10px Consolas,monospace";
+    ctx.fillText("#D" + i, x0 - 8, yy + 14);
+    /* 1 real token */
+    var w1 = Math.max(px, 3);
+    ctx.fillStyle = "#3fb950";
+    rrect(ctx, x0, yy, w1, 26, 2); ctx.fill();
+    /* padding */
+    ctx.fillStyle = ctx.createPattern(HATCH_P, "repeat");
+    ctx.fillRect(x0 + w1, yy, (x1 - x0) - w1, 26);
+    ctx.strokeStyle = "#1e2a3c"; ctx.strokeRect(x0, yy, x1 - x0, 26);
+    ctx.fillStyle = "#f472b6"; ctx.textAlign = "left"; ctx.font = "10px Consolas,monospace";
+    ctx.fillText("1 tok + " + (mx.chunk - 1) + " pad", x0 + w1 + 8, yy + 17);
+  }
+  /* meters */
+  var useful = mx.chunk + mx.dec, processed = (mx.dec + 1) * mx.chunk;
+  var eff = 100 * useful / processed;
+  el("mxEff").textContent = Math.round(eff) + "%";
+  el("mxEff").parentElement.className = "meter " + (eff < 50 ? "m-bad" : "m-eff");
+  el("mxUse").textContent = String(useful);
+  el("mxPad").textContent = String(processed - useful);
+  el("mxChunkV").textContent = mx.chunk + " tok";
+  el("mxDecV").textContent = String(mx.dec);
+}
+el("mxChunk").addEventListener("input", function(){ mx.chunk = parseInt(this.value,10); mxRender(); });
+el("mxDec").addEventListener("input", function(){ mx.dec = parseInt(this.value,10); mxRender(); });
+
+/* =====================================================
+   2b. MIXED FORWARD PIPELINE (step-through)
+   ===================================================== */
+var PP_STAGES = [
+  {t:"1 · concat the inputs",
+   p:"All 514 tokens — 512 prefill + 2 decode — enter as one flat list. Nothing is padded: the \u201cbatch\u201d is just tokens, and the per-token ops that follow never see a batch dimension at all.",
+   on:["ppIn1","ppIn2","ppCat1"]},
+  {t:"2 · embedding — per token",
+   p:"A lookup table indexed by token id. It neither knows nor cares which request a token belongs to, so all 514 rows flow through in one fused kernel.",
+   on:["ppEmb"]},
+  {t:"3 · attention — the only split",
+   p:"Prefill queries attend to a growing KV cache across 512 positions — a GEMM, compute-bound. Decode queries read their own paged KV at one position each — a GEMV, memory-bound. Different caches, different lengths: FlashInfer ships separate kernels (BatchPrefill… / BatchDecode…).",
+   on:["ppAttnP","ppAttnD"]},
+  {t:"4 · concat → FFN — per token again",
+   p:"The two attention outputs concatenate back into one list of 514. The FFN is per-token like the embedding: one big fused GEMM over everything — this is where mixing pays.",
+   on:["ppFfn"]},
+  {t:"5 · LM head → slice per request",
+   p:"The head shares the same fusion; the output rows are sliced back per request — prefill logits start streaming, decode requests each get their next token. Zero padding anywhere in the pass.",
+   on:["ppOut"]}
+];
+var pp = {i:0};
+function ppRender(){
+  ["ppIn1","ppIn2","ppCat1","ppEmb","ppAttnP","ppAttnD","ppFfn","ppOut"].forEach(function(id){
+    el(id).classList.toggle("on", PP_STAGES[pp.i].on.indexOf(id) >= 0);
+  });
+  el("ppTitle").textContent = PP_STAGES[pp.i].t;
+  el("ppText").textContent = PP_STAGES[pp.i].p;
+  var dots = el("ppDots");
+  dots.innerHTML = "";
+  PP_STAGES.forEach(function(s2, i2){
+    var d = document.createElement("i");
+    if(i2 === pp.i) d.className = "on";
+    dots.appendChild(d);
+  });
+}
+el("ppNext").addEventListener("click", function(){ pp.i = Math.min(pp.i + 1, PP_STAGES.length - 1); ppRender(); });
+el("ppPrev").addEventListener("click", function(){ pp.i = Math.max(pp.i - 1, 0); ppRender(); });
+el("ppReset").addEventListener("click", function(){ pp.i = 0; ppRender(); });
+ppRender();
+
+/* =====================================================
+   3. CUDA GRAPHS
+   ===================================================== */
+var gr = {cv:el("grCanvas"), ctx:null, W:0, H:236, bs:1};
+function grCompute(bs){ return 5 + 15 * (bs - 1) / 31; }   /* bs1 ≈ 5 ms · bs32 ≈ 20 ms */
+function grRender(){
+  gr.ctx = sizeCanvas(gr.cv, gr.H);
+  gr.W = gr.cv.clientWidth || 900;
+  var ctx = gr.ctx, W = gr.W;
+  var compute = grCompute(gr.bs), oh = 1.5;
+  var eager = compute + oh, graph = compute + 0.1;
+  var xMax = eager;
+  var padL = 96, padR = 130;
+  var ppm = (W - padL - padR) / xMax;                    /* px per ms */
+  function X(ms){ return padL + ms * ppm; }
+  ctx.clearRect(0, 0, W, gr.H);
+  ctx.font = "10px Consolas,monospace";
+  /* --- eager --- */
+  ctx.fillStyle = "#7d8ca0"; ctx.textAlign = "left";
+  ctx.fillText("EAGER", 12, 34);
+  ctx.fillStyle = "#4b5a6e"; ctx.textAlign = "right";
+  ctx.fillText("CPU", padL - 10, 58);
+  ctx.fillText("GPU", padL - 10, 86);
+  /* cpu busy bar */
+  ctx.fillStyle = "#ff9040";
+  rrect(ctx, X(0), 46, X(eager) - X(0), 18, 3); ctx.fill();
+  ctx.fillStyle = "#0a0e14"; ctx.textAlign = "left"; ctx.font = "9.5px Consolas,monospace";
+  ctx.fillText("issuing 300 launches — busy all step", X(0) + 6, 58);
+  /* gpu kernels */
+  ctx.font = "10px Consolas,monospace";
+  var kw = compute / 300 * ppm, gap = oh / 300 * ppm, i, kx;
+  ctx.fillStyle = "rgba(63,185,80,.8)";
+  for(i = 0; i < 300; i++){
+    kx = X(0) + i * (kw + gap);
+    if(kx + kw > W - padR + 40) break;
+    ctx.fillRect(kx, 74, Math.max(kw, 0.4), 18);
+  }
+  ctx.font = "9.5px Consolas,monospace";
+  blabel(ctx, "300 kernels + launch gaps", X(0) + 6, 86, "#7d8ca0");
+  /* --- graph --- */
+  ctx.font = "10px Consolas,monospace";
+  ctx.fillStyle = "#7d8ca0"; ctx.textAlign = "left";
+  ctx.fillText("CUDA", 12, 140);
+  ctx.fillText("GRAPH", 12, 152);
+  ctx.fillStyle = "#4b5a6e"; ctx.textAlign = "right";
+  ctx.fillText("CPU", padL - 10, 164);
+  ctx.fillText("GPU", padL - 10, 192);
+  /* cpu: one sliver, then idle for the whole step */
+  ctx.fillStyle = "#ff9040";
+  ctx.fillRect(X(0), 152, 3, 18);
+  ctx.fillStyle = ctx.createPattern(HATCH_G, "repeat");
+  ctx.fillRect(X(0) + 3, 152, eager * ppm - 3, 18);
+  ctx.font = "9.5px Consolas,monospace";
+  blabel(ctx, "copy_() + replay()  →  idle — free to schedule (§4)", X(0) + 9, 164, "#7d8ca0");
+  /* warmup annotation above the gpu lane */
+  ctx.fillStyle = "#a78bfa"; ctx.textAlign = "left"; ctx.font = "9.5px Consolas,monospace";
+  ctx.fillText("captured once at warmup (dashed)", X(0) - 2, 179);
+  /* gpu: capture ghost (one-time) + solid replay */
+  var ghostW = 24;
+  ctx.strokeStyle = "#a78bfa"; ctx.setLineDash([4,3]); ctx.lineWidth = 1.2;
+  ctx.strokeRect(X(0), 182, ghostW, 18);
+  ctx.setLineDash([]);
+  ctx.fillStyle = "#3fb950";
+  rrect(ctx, X(0) + ghostW + 6, 182, X(graph) - X(0) - ghostW - 6, 18, 3); ctx.fill();
+  ctx.fillStyle = "#0a0e14"; ctx.textAlign = "left";
+  ctx.fillText("replay — 1 launch", X(0) + ghostW + 12, 194);
+  /* time axis */
+  ctx.strokeStyle = "rgba(30,42,60,.9)";
+  ctx.beginPath(); ctx.moveTo(X(0), 212); ctx.lineTo(X(xMax), 212); ctx.stroke();
+  ctx.fillStyle = "#4b5a6e"; ctx.textAlign = "center";
+  [0, compute / 2, compute, eager].forEach(function(ms){
+    var xx = X(ms);
+    ctx.beginPath(); ctx.moveTo(xx, 209); ctx.lineTo(xx, 215); ctx.stroke();
+    ctx.fillText(ms.toFixed(1), xx, 228);
+  });
+  ctx.textAlign = "left"; ctx.fillText("ms", X(xMax) + 8, 228);
+  /* meters */
+  el("grOh").textContent = (100 * oh / compute).toFixed(1).replace(/\.0$/,"") + "%";
+  el("grEager").textContent = eager.toFixed(1) + " ms";
+  el("grGraph").textContent = graph.toFixed(1) + " ms";
+  el("grSp").textContent = (eager / graph).toFixed(2) + "×";
+  el("grBsV").textContent = String(gr.bs);
+}
+el("grBs").addEventListener("input", function(){ gr.bs = parseInt(this.value,10); grRender(); });
+
+/* ---- shape buckets ---- */
+var BK = [1, 2, 4, 8, 16, 32];
+var bkRow = el("bkRow");
+var bkCells = {};
+function bkRender(){
+  var n = parseInt(el("bkN").value, 10);
+  var bucket = 0;
+  for(var i = 0; i < BK.length; i++){ if(BK[i] >= n){ bucket = BK[i]; break; } }
+  BK.forEach(function(b){
+    var d = bkCells[b];
+    d.className = "buk" + (b === bucket ? " sel" : "") + (b < n ? " blit" : "");
+    var fill = Math.min(100, 100 * n / b);
+    d.querySelector(".bf").style.height = fill + "%";
+    d.querySelector(".bpad").style.height = (100 - fill) + "%";
+  });
+  el("bkNV").textContent = n + (n === 1 ? " seq" : " seqs");
+  el("bkBucket").textContent = bucket ? String(bucket) : ">32";
+  el("bkWaste").textContent = bucket ? String(bucket - n) : "0";
+  var note = document.getElementById("bkNote");
+  if(note) note.textContent = bucket
+    ? "batch " + n + " padded to bucket " + bucket + " — " + (bucket - n) + " wasted slot" + (bucket - n === 1 ? "" : "s")
+    : "batch " + n + " exceeds the largest graph — falls back to eager execution";
+}
+(function bkInit(){
+  BK.forEach(function(b){
+    var d = document.createElement("div");
+    d.className = "buk";
+    var f = document.createElement("div"); f.className = "bf"; d.appendChild(f);
+    var pd = document.createElement("div"); pd.className = "bpad"; d.appendChild(pd);
+    var l = document.createElement("span"); l.className = "bl"; l.textContent = String(b); d.appendChild(l);
+    d.title = "pre-captured graph for batch size " + b;
+    bkRow.appendChild(d);
+    bkCells[b] = d;
+  });
+  var note = document.createElement("span");
+  note.className = "buk-note"; note.id = "bkNote";
+  bkRow.appendChild(note);
+})();
+el("bkN").addEventListener("input", bkRender);
+
+/* =====================================================
+   4. OVERLAP SCHEDULING
+   ===================================================== */
+var ov = {cv:el("ovCanvas"), ctx:null, W:0, H:190, mode:"seq", s:2, c:10, t:0, playing:false, raf:0, last:0};
+function ovTotal(){
+  return ov.mode === "seq" ? 5 * (ov.c + ov.s) : ov.s + 5 * ov.c;
+}
+function ovBlocks(){
+  /* returns {cpu:[[t,d]...], gpu:[[t,d]...]} */
+  var cpu = [], gpu = [], i;
+  if(ov.mode === "seq"){
+    for(i = 0; i < 5; i++){
+      gpu.push([i * (ov.c + ov.s), ov.c]);
+      cpu.push([i * (ov.c + ov.s) + ov.c, ov.s]);
+    }
+  } else {
+    cpu.push([0, ov.s]);                        /* warm-up */
+    for(i = 0; i < 5; i++) gpu.push([ov.s + i * ov.c, ov.c]);
+    for(i = 1; i <= 4; i++) cpu.push([i * ov.c, ov.s]);
+  }
+  return {cpu:cpu, gpu:gpu};
+}
+function ovRender(){
+  ov.ctx = sizeCanvas(ov.cv, ov.H);
+  ov.W = ov.cv.clientWidth || 900;
+  var ctx = ov.ctx, W = ov.W, total = ovTotal(), B = ovBlocks();
+  var padL = 66, padR = 16;
+  function X(ms){ return padL + (ms / total) * (W - padL - padR); }
+  ctx.clearRect(0, 0, W, ov.H);
+  ctx.font = "10px Consolas,monospace";
+  ctx.fillStyle = "#4b5a6e"; ctx.textAlign = "right";
+  ctx.fillText("CPU", padL - 10, 44);
+  ctx.fillText("GPU", padL - 10, 104);
+  /* idle hatch behind GPU lane */
+  ctx.fillStyle = ctx.createPattern(HATCH_G, "repeat");
+  ctx.fillRect(X(0), 88, X(total) - X(0), 26);
+  /* blocks: full extent faint, solid up to the playhead */
+  function drawBlocks(list, y, color){
+    list.forEach(function(b){
+      ctx.globalAlpha = .22; ctx.fillStyle = color;
+      rrect(ctx, X(b[0]), y, X(b[0] + b[1]) - X(b[0]), 26, 3); ctx.fill();
+      ctx.globalAlpha = 1;
+      var a = Math.min(b[0] + b[1], ov.t);
+      if(a > b[0]){
+        ctx.fillStyle = color;
+        rrect(ctx, X(b[0]), y, X(a) - X(b[0]), 26, 3); ctx.fill();
+      }
+    });
+  }
+  drawBlocks(B.cpu, 28, "#ff9040");
+  drawBlocks(B.gpu, 88, "#3fb950");
+  /* lane borders */
+  ctx.strokeStyle = "#1e2a3c"; ctx.lineWidth = 1;
+  ctx.strokeRect(X(0), 28, X(total) - X(0), 26);
+  ctx.strokeRect(X(0), 88, X(total) - X(0), 26);
+  /* labels */
+  ctx.font = "9.5px Consolas,monospace";
+  blabel(ctx, "schedule step N+1", X(0) + 6, 44, "#7d8ca0");
+  blabel(ctx, "forward step N", X(0) + 6, 104, "#7d8ca0");
+  if(ov.mode === "ovl"){
+    ctx.fillStyle = "#4dd0e1";
+    ctx.fillText("warm-up", X(0) + 4, 24);
+  }
+  /* time axis — last tick carries the unit */
+  ctx.fillStyle = "#4b5a6e"; ctx.textAlign = "center"; ctx.font = "10px Consolas,monospace";
+  var step = total > 80 ? 20 : 10, g2;
+  for(g2 = 0; g2 <= total + 0.01; g2 += step){
+    var xx = X(g2);
+    var lab = (g2 + step > total + 0.01) ? (Math.round(g2) + " ms") : String(Math.round(g2));
+    ctx.fillText(lab, xx, 136);
+  }
+  /* playhead */
+  var px = X(Math.min(ov.t, total));
+  ctx.strokeStyle = "#58a6ff"; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(px, 20); ctx.lineTo(px, 124); ctx.stroke();
+  ovChecklist();
+  ovMeters();
+}
+function ovInCpu(t){
+  var B = ovBlocks();
+  for(var i = 0; i < B.cpu.length; i++){
+    var b = B.cpu[i];
+    if(t >= b[0] && t <= b[0] + b[1]) return (t - b[0]) / b[1];
+  }
+  return -1;
+}
+function ovChecklist(){
+  var lis = document.querySelectorAll("#ovSteps li");
+  var f = ovInCpu(ov.t);
+  var idx = f >= 0 ? Math.min(3, Math.floor(f * 4)) : -1;
+  lis.forEach(function(li, i){ li.classList.toggle("on", i <= idx && f >= 0); });
+}
+function ovMeters(){
+  var idle;
+  if(ov.mode === "seq"){
+    idle = 100 * ov.s / (ov.c + ov.s);
+  } else {
+    idle = 100 * ov.s / (ov.s + 5 * ov.c);
+  }
+  var ovlT = Math.round(1000 * (ov.c + ov.s) / ov.c);   /* model: hide the whole schedule gap */
+  el("ovIdle").textContent = idle < 1 ? "<1%" : Math.round(idle) + "%";
+  el("ovSeqT").textContent = "1000";
+  el("ovOvlT").textContent = String(ovlT);
+  el("ovGain").textContent = "+" + Math.round(100 * ((ov.c + ov.s) / ov.c - 1)) + "%";
+  el("ovSV").textContent = ov.s.toFixed(1) + " ms";
+  el("ovCV").textContent = ov.c.toFixed(1) + " ms";
+}
+function ovStopPlay(){
+  ov.playing = false;
+  if(ov.raf) cancelAnimationFrame(ov.raf);
+  el("ovPlay").textContent = "▶ Play";
+}
+function ovLoop(now){
+  if(!ov.playing) return;
+  if(ov.last === 0) ov.last = now;
+  ov.t += (now - ov.last) / 1000 * 60;    /* 60 sim-ms per real second */
+  ov.last = now;
+  if(ov.t >= ovTotal()){ ov.t = ovTotal(); ovRender(); ovStopPlay(); return; }
+  ovRender();
+  ov.raf = requestAnimationFrame(ovLoop);
+}
+function ovSetMode(m){
+  ov.mode = m;
+  el("ovSeq").classList.toggle("on", m === "seq");
+  el("ovOvl").classList.toggle("on", m === "ovl");
+  ovStopPlay(); ov.t = 0; ovRender();
+}
+el("ovSeq").addEventListener("click", function(){ ovSetMode("seq"); });
+el("ovOvl").addEventListener("click", function(){ ovSetMode("ovl"); });
+el("ovPlay").addEventListener("click", function(){
+  if(ov.playing){ ovStopPlay(); return; }
+  if(ov.t >= ovTotal()) ov.t = 0;
+  ov.playing = true; ov.last = 0;
+  el("ovPlay").textContent = "⏸ Pause";
+  ov.raf = requestAnimationFrame(ovLoop);
+});
+el("ovReset").addEventListener("click", function(){ ovStopPlay(); ov.t = 0; ovRender(); });
+el("ovS").addEventListener("input", function(){ ov.s = parseFloat(this.value); ovStopPlay(); ov.t = 0; ovRender(); });
+el("ovC").addEventListener("input", function(){ ov.c = parseFloat(this.value); ovStopPlay(); ov.t = 0; ovRender(); });
+
+/* =====================================================
+   5. ONE ITERATION — spotlight
+   ===================================================== */
+document.querySelectorAll(".itl").forEach(function(btn){
+  btn.addEventListener("click", function(){
+    var t = btn.getAttribute("data-t");
+    var svg = el("itSvg");
+    var already = svg.classList.contains("spot-" + t);
+    svg.classList.remove("spot-1","spot-2","spot-3","spot-4");
+    document.querySelectorAll(".itl").forEach(function(b){ b.classList.remove("on"); });
+    if(!already){
+      svg.classList.add("spot-" + t);
+      btn.classList.add("on");
+    }
+  });
+});
+
+/* =====================================================
+   boot + resize
+   ===================================================== */
+function bootAll(){
+  ck.ctx = sizeCanvas(ck.cv, ck.H);
+  ck.W = ck.cv.clientWidth || 900;
+  ckBuild();
+  mxRender();
+  grRender();
+  bkRender();
+  ovRender();
+}
+var rszTimer = null;
+window.addEventListener("resize", function(){
+  if(rszTimer) clearTimeout(rszTimer);
+  rszTimer = setTimeout(bootAll, 150);
+});
+bootAll();
+
+})();
+</script>
+</body>
+</html>
